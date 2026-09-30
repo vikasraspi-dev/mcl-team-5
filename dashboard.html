@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard - HEMM Shift Allocator</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</head>
+<body>
+  <header id="site-header"></header>
+  <main>
+    <h1>Dashboard</h1>
+    <p class="muted">Anyone can view this page. It updates by itself every 30 seconds.</p>
+    <div id="message" class="hidden"></div>
+
+    <label for="d-date">Date</label>
+    <input type="date" id="d-date">
+    <div class="btn-row" id="shift-buttons" style="margin-top:8px"></div>
+    <button class="btn secondary" id="refresh">Refresh now</button>
+
+    <div id="summary"></div>
+
+    <h2 id="alloc-title">Allocation</h2>
+    <div class="card" id="alloc-list"><p class="muted">Loading...</p></div>
+
+    <h2>Needs attention</h2>
+    <div class="card" id="attention"></div>
+
+    <h2>HEMM condition by type</h2>
+    <div class="card"><div class="chart-box"><canvas id="chart-hemm"></canvas></div>
+      <p class="legend-note" id="hemm-text"></p></div>
+
+    <h2>Operators by shift</h2>
+    <div class="card"><div class="chart-box"><canvas id="chart-ops"></canvas></div>
+      <p class="legend-note" id="ops-text"></p></div>
+  </main>
+
+  <script>
+    renderHeader('dashboard.html');
+    var info = currentShiftInfo();
+    var selDate = info.date, selShift = info.shift;
+    var records = [];
+    var charts = {};
+
+    var dateInput = document.getElementById('d-date');
+    dateInput.value = selDate;
+    dateInput.onchange = function () { selDate = dateInput.value || selDate; render(); };
+    document.getElementById('refresh').onclick = function () { clearMessage(); load(); };
+
+    function drawShiftButtons() {
+      document.getElementById('shift-buttons').innerHTML = SHIFTS.map(function (s) {
+        return '<button class="btn secondary' + (s === selShift ? ' on' : '') + '" data-shift="' + s + '">Shift ' + s + '<br><small>' + SHIFT_TIMES[s] + '</small></button>';
+      }).join('');
+    }
+    document.getElementById('shift-buttons').addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-shift]');
+      if (b) { selShift = b.getAttribute('data-shift'); render(); }
+    });
+
+    async function load() {
+      try {
+        records = await loadRecords();
+        render();
+      } catch (err) {
+        showError('Could not load the dashboard data. Please check the internet and press Refresh.', err);
+      }
+    }
+
+    function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+    function drawChart(key, canvasId, labels, datasets) {
+      if (typeof Chart === 'undefined') { return; }
+      var ink = css('--ink2'), grid = css('--line'), surface = css('--surface');
+      datasets.forEach(function (d) { d.borderColor = surface; d.borderWidth = 2; d.borderRadius = 4; });
+      if (charts[key]) charts[key].destroy();
+      charts[key] = new Chart(document.getElementById(canvasId), {
+        type: 'bar',
+        data: { labels: labels, datasets: datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { position: 'bottom', labels: { color: ink, boxWidth: 14, font: { size: 13 } } } },
+          scales: {
+            x: { stacked: true, ticks: { color: ink }, grid: { display: false } },
+            y: { stacked: true, beginAtZero: true, ticks: { color: ink, precision: 0 }, grid: { color: grid } }
+          }
+        }
+      });
+    }
+
+    function render() {
+      drawShiftButtons();
+      var a = computeAllocation(records, selDate, selShift);
+      var where = 'Shift ' + selShift + ', ' + niceDate(selDate);
+
+      document.getElementById('summary').innerHTML = '<div class="tiles" style="margin-top:12px">' +
+        tile(a.fitCount + ' / ' + a.hemmCount, 'HEMMs OK') +
+        tile(a.availableCount, 'Operators available') +
+        tile(a.assignments.length, 'Machines running') +
+        tile(a.idleHemms.length, 'OK machines with no operator') + '</div>';
+
+      document.getElementById('alloc-title').textContent = 'Allocation: ' + where;
+      document.getElementById('alloc-list').innerHTML = a.assignments.length ? a.assignments.map(function (x) {
+        return '<div class="pair"><div><b>' + esc(x.operator.name) + '</b>' +
+          (x.overtime ? ' <span class="badge info">Overtime, Shift ' + x.operator.home_shift + '</span>' : '') +
+          '<br><span class="muted">' + esc(x.operator.skill_group) + '</span></div>' +
+          '<div class="arrow">drives</div>' +
+          '<div><b>' + esc(x.hemm.name) + '</b><br><span class="muted">' + esc(x.hemm.make_model) + '</span></div></div>';
+      }).join('') : '<p class="muted">No allocation yet. It appears when operators mark Present (or Overtime) and machines are OK.</p>';
+
+      var att = '';
+      if (a.idleHemms.length) att += '<h3>OK machines waiting for an operator</h3><p>' + a.idleHemms.map(function (h) { return esc(h.name); }).join(', ') + '</p>';
+      if (a.idleOperators.length) att += '<h3>Operators with no machine</h3><p>' + a.idleOperators.map(function (x) { return esc(x.operator.name) + ' (' + esc(x.operator.skill_group) + ')'; }).join(', ') + '</p>';
+      if (a.notFit.length) att += '<h3>Machines not fit</h3>' + a.notFit.map(function (h) {
+        return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b><br><span class="muted">' + esc(h.location) + ' &middot; urgency ' + esc(h.urgency) + (h.remarks ? ' &middot; ' + esc(h.remarks) : '') + '</span></div>' +
+          '<span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span></div>';
+      }).join('');
+      document.getElementById('attention').innerHTML = att || '<p>Nothing needs attention.</p>';
+
+      // Chart 1: HEMM condition by type (status colours)
+      var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
+      var types = ['Excavator', 'Dumper', 'Motor Grader', 'Water Sprinkler'];
+      var count = function (t, st) { return hemms.filter(function (h) { return h.hemm_type === t && h.status === st; }).length; };
+      drawChart('hemm', 'chart-hemm', types, [
+        { label: 'OK (fit)', backgroundColor: '#0ca30c', data: types.map(function (t) { return count(t, 'Resolved'); }) },
+        { label: 'Under repair', backgroundColor: '#fab219', data: types.map(function (t) { return count(t, 'In progress'); }) },
+        { label: 'Breakdown', backgroundColor: '#d03b3b', data: types.map(function (t) { return count(t, 'Open'); }) }
+      ]);
+      document.getElementById('hemm-text').textContent = types.map(function (t) {
+        return t + ': ' + count(t, 'Resolved') + ' OK, ' + count(t, 'In progress') + ' under repair, ' + count(t, 'Open') + ' breakdown';
+      }).join('. ') + '.';
+
+      // Chart 2: operators per shift for the chosen date
+      var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
+      var home = function (s, att) { return ops.filter(function (o) { return o.home_shift === s && o.duty_date === selDate && o.attendance === att; }).length; };
+      var ot = function (s) { return ops.filter(function (o) { return o.home_shift !== s && o.attendance === 'Overtime' && o.duty_shift === s && o.duty_date === selDate; }).length; };
+      var notMarked = function (s) {
+        var total = ops.filter(function (o) { return o.home_shift === s; }).length;
+        return total - home(s, 'Present') - home(s, 'Absent');
+      };
+      drawChart('ops', 'chart-ops', SHIFTS.map(function (s) { return 'Shift ' + s; }), [
+        { label: 'Present', backgroundColor: '#2a78d6', data: SHIFTS.map(function (s) { return home(s, 'Present'); }) },
+        { label: 'Overtime from other shift', backgroundColor: '#eb6834', data: SHIFTS.map(ot) },
+        { label: 'Absent', backgroundColor: '#1baf7a', data: SHIFTS.map(function (s) { return home(s, 'Absent'); }) },
+        { label: 'Not marked yet', backgroundColor: '#898781', data: SHIFTS.map(notMarked) }
+      ]);
+      document.getElementById('ops-text').textContent = SHIFTS.map(function (s) {
+        return 'Shift ' + s + ': ' + home(s, 'Present') + ' present, ' + ot(s) + ' overtime, ' + home(s, 'Absent') + ' absent, ' + notMarked(s) + ' not marked';
+      }).join('. ') + '. Date: ' + niceDate(selDate) + '.';
+    }
+    function tile(num, label) { return '<div class="tile"><div class="num">' + num + '</div><div class="lbl">' + label + '</div></div>'; }
+
+    load();
+    setInterval(load, 30000);
+  </script>
+</body>
+</html>

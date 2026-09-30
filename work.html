@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Work - HEMM Shift Allocator</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</head>
+<body>
+  <header id="site-header"></header>
+  <main>
+    <h1 id="page-title">My Work</h1>
+    <div id="message" class="hidden"></div>
+    <div id="content"><p class="muted">Loading...</p></div>
+    <button class="btn secondary" id="refresh">Refresh</button>
+  </main>
+
+  <script>
+    renderHeader('work.html');
+    var role = getRole();
+    var records = [];
+    var busy = false;
+
+    if (!ROLE_NAMES[role]) {
+      window.location.href = 'index.html';
+    }
+
+    // ---------- Loading and saving ----------
+    async function refresh() {
+      try {
+        records = await loadRecords();
+        render();
+      } catch (err) {
+        document.getElementById('content').innerHTML = '';
+        showError('Could not load the data. Please check the internet and press Refresh.', err);
+      }
+    }
+    async function save(id, fields, okText) {
+      if (busy) return;
+      busy = true;
+      try {
+        await updateRecord(id, fields);
+        records = await loadRecords();
+        render();
+        showMessage(okText || 'Saved.', 'ok');
+      } catch (err) {
+        showError('Sorry, the change could not be saved.', err);
+      }
+      busy = false;
+    }
+    document.getElementById('refresh').onclick = function () { clearMessage(); refresh(); };
+
+    function render() {
+      if (role === 'engineer') renderEngineer();
+      else if (role === 'operator') renderOperator();
+      else renderIncharge();
+    }
+    function byId(id) { return records.filter(function (r) { return r.id === id; })[0]; }
+
+    // ---------- Maintenance Engineer ----------
+    function renderEngineer() {
+      document.getElementById('page-title').textContent = 'Maintenance Engineer: HEMM condition';
+      var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
+      var fit = hemms.filter(isFit).length;
+      var html = '<p>Tap a button to say if each machine is fit to work. <b>' + fit + ' of ' + hemms.length + '</b> are OK now.</p>';
+      hemms.forEach(function (h) {
+        html += '<div class="card" data-id="' + esc(h.id) + '">' +
+          '<div class="row"><div class="grow"><h3>' + esc(h.name) + '</h3>' +
+          '<span class="muted">' + esc(h.make_model) + ' &middot; Sl. no. ' + esc(h.serial_no) + '</span></div>' +
+          '<span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span></div>' +
+          '<div class="btn-row">' +
+          '<button class="btn good' + (h.status === 'Resolved' ? ' on' : '') + '" data-act="status" data-val="Resolved">OK (fit)</button>' +
+          '<button class="btn warn' + (h.status === 'In progress' ? ' on' : '') + '" data-act="status" data-val="In progress">Under repair</button>' +
+          '<button class="btn bad' + (h.status === 'Open' ? ' on' : '') + '" data-act="status" data-val="Open">Breakdown</button></div>' +
+          '<div class="field-grid">' +
+          '<div><label>Location</label><select data-f="location">' + LOCATIONS.map(function (l) {
+            return '<option' + (l === h.location ? ' selected' : '') + '>' + l + '</option>'; }).join('') + '</select></div>' +
+          '<div><label>Repair urgency</label><select data-f="urgency">' + ['Low', 'Medium', 'High'].map(function (u) {
+            return '<option' + (u === h.urgency ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select></div></div>' +
+          '<label>Remarks (optional)</label><input type="text" data-f="remarks" maxlength="200" value="' + esc(h.remarks || '') + '" placeholder="e.g. hydraulic hose leak">' +
+          '<button class="btn secondary" data-act="details">Save location, urgency and remarks</button></div>';
+      });
+      document.getElementById('content').innerHTML = html;
+    }
+    function engineerFields(card) {
+      return {
+        location: card.querySelector('[data-f=location]').value,
+        urgency: card.querySelector('[data-f=urgency]').value,
+        remarks: card.querySelector('[data-f=remarks]').value.trim() || null
+      };
+    }
+
+    // ---------- Operator ----------
+    var opDate = null;
+    function renderOperator() {
+      document.getElementById('page-title').textContent = 'Operator: my duty';
+      var me = byId(getOperatorId());
+      if (!me || me.record_type !== 'OPERATOR') {
+        document.getElementById('content').innerHTML =
+          '<div class="card"><p>Please choose your name first.</p><a class="btn" href="index.html">Choose my name</a></div>';
+        return;
+      }
+      var info = currentShiftInfo();
+      if (!opDate) opDate = info.date;
+      var mine = me.duty_date === opDate ? me : null;   // my mark for the chosen date
+      var attendance = mine ? mine.attendance : 'Not marked';
+      var others = SHIFTS.filter(function (s) { return s !== me.home_shift; });
+
+      // Which shift and machine do I have for this date?
+      var dutyShift = attendance === 'Overtime' ? mine.duty_shift : me.home_shift;
+      var machineText = '';
+      if (attendance === 'Present' || attendance === 'Overtime') {
+        var alloc = computeAllocation(records, opDate, dutyShift);
+        var mineA = alloc.assignments.filter(function (a) { return a.operator.id === me.id; })[0];
+        machineText = mineA
+          ? '<div class="msg ok">Your machine for Shift ' + dutyShift + ': <b>' + esc(hemmLabel(mineA.hemm)) + '</b></div>'
+          : '<div class="msg info">No machine for you yet in Shift ' + dutyShift + '. A fit machine of your type is needed. Check again later.</div>';
+      }
+
+      var badge = attendance === 'Present' ? '<span class="badge good">Present, Shift ' + me.home_shift + '</span>' :
+        attendance === 'Absent' ? '<span class="badge bad">Absent, Shift ' + me.home_shift + '</span>' :
+        attendance === 'Overtime' ? '<span class="badge info">Overtime interest, Shift ' + mine.duty_shift + '</span>' :
+        '<span class="badge none">Not marked</span>';
+
+      document.getElementById('content').innerHTML =
+        '<div class="card"><h3>' + esc(me.name) + '</h3>' +
+        '<p class="muted">Home shift ' + me.home_shift + ' (' + SHIFT_TIMES[me.home_shift] + ') &middot; ' + esc(me.skill_group) + ' operator</p></div>' +
+        '<label for="op-date">Duty date</label><input type="date" id="op-date" value="' + opDate + '">' +
+        '<div class="card"><p>Your answer for ' + niceDate(opDate) + ': ' + badge + '</p>' + machineText + '</div>' +
+        '<h2>My own shift (Shift ' + me.home_shift + ')</h2>' +
+        '<div class="btn-row"><button class="btn good' + (attendance === 'Present' ? ' on' : '') + '" data-act="present">I will be PRESENT</button>' +
+        '<button class="btn bad' + (attendance === 'Absent' ? ' on' : '') + '" data-act="absent">I will be ABSENT</button></div>' +
+        '<h2>Overtime in another shift</h2>' +
+        '<p class="muted">Want extra duty? Choose a shift that is not yours. Your answer for this date is replaced.</p>' +
+        '<label for="ot-shift">Shift</label><select id="ot-shift">' + others.map(function (s) {
+          return '<option value="' + s + '"' + (mine && mine.duty_shift === s ? ' selected' : '') + '>Shift ' + s + ' (' + SHIFT_TIMES[s] + ')</option>'; }).join('') + '</select>' +
+        '<button class="btn warn' + (attendance === 'Overtime' ? ' on' : '') + '" data-act="overtime">I am interested in overtime</button>' +
+        (attendance === 'Overtime' ? '<button class="btn secondary" data-act="clear">Withdraw my overtime interest</button>' : '');
+    }
+    function opFields(att, shift, date) {
+      return { attendance: att, duty_date: date, duty_shift: shift, status: att === 'Overtime' ? 'In progress' : 'Resolved' };
+    }
+
+    // ---------- Shift Incharge ----------
+    var inDate = null, inShift = null;
+    function renderIncharge() {
+      document.getElementById('page-title').textContent = 'Shift Incharge: attendance help';
+      var info = currentShiftInfo();
+      if (!inDate) { inDate = info.date; inShift = info.shift; }
+      var ops = records.filter(function (r) { return r.record_type === 'OPERATOR' && r.home_shift === inShift; })
+        .sort(function (a, b) { return a.name.localeCompare(b.name); });
+      var html = '<p>Use this if an operator phones in. You can mark their attendance for them. Overtime is raised by the operator.</p>' +
+        '<label for="in-date">Date</label><input type="date" id="in-date" value="' + inDate + '">' +
+        '<div class="btn-row" style="margin-top:8px">' + SHIFTS.map(function (s) {
+          return '<button class="btn secondary' + (s === inShift ? ' on' : '') + '" data-act="shift" data-val="' + s + '">Shift ' + s + '</button>'; }).join('') + '</div>' +
+        '<a class="btn" href="dashboard.html">Open the dashboard</a>' +
+        '<h2>Shift ' + inShift + ' operators</h2><div class="card">';
+      ops.forEach(function (o) {
+        var att = o.duty_date === inDate ? o.attendance : 'Not marked';
+        html += '<div class="row" data-id="' + esc(o.id) + '"><div class="grow"><b>' + esc(o.name) + '</b><br><span class="muted">' + esc(o.skill_group) + '</span></div>' +
+          '<span class="badge ' + (att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : att === 'Overtime' ? 'info' : 'none') + '">' + att + '</span>' +
+          '<div class="btn-row" style="width:100%"><button class="btn good' + (att === 'Present' ? ' on' : '') + '" data-act="present">Present</button>' +
+          '<button class="btn bad' + (att === 'Absent' ? ' on' : '') + '" data-act="absent">Absent</button></div></div>';
+      });
+      html += '</div>';
+      var ot = records.filter(function (r) { return r.record_type === 'OPERATOR' && r.attendance === 'Overtime' && r.duty_date === inDate && r.duty_shift === inShift; });
+      html += '<h2>Overtime interest for Shift ' + inShift + '</h2><div class="card">' + (ot.length ? ot.map(function (o) {
+        return '<div class="row"><div class="grow"><b>' + esc(o.name) + '</b><br><span class="muted">' + esc(o.skill_group) + ', home Shift ' + o.home_shift + '</span></div><span class="badge info">Overtime</span></div>';
+      }).join('') : '<p class="muted">Nobody has raised interest yet.</p>') + '</div>';
+      document.getElementById('content').innerHTML = html;
+    }
+
+    // ---------- One click handler for the whole page ----------
+    document.getElementById('content').addEventListener('click', function (e) {
+      var btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      var act = btn.getAttribute('data-act');
+      clearMessage();
+      var card = btn.closest('[data-id]');
+      if (role === 'engineer' && card) {
+        var id = card.getAttribute('data-id');
+        if (act === 'status') {
+          var f = engineerFields(card); f.status = btn.getAttribute('data-val');
+          save(id, f, 'Machine status saved.');
+        } else if (act === 'details') {
+          save(id, engineerFields(card), 'Details saved.');
+        }
+      } else if (role === 'operator') {
+        var me = byId(getOperatorId());
+        if (!me) return;
+        if (act === 'present') save(me.id, opFields('Present', me.home_shift, opDate), 'Saved: you will be PRESENT on ' + niceDate(opDate) + '.');
+        if (act === 'absent') save(me.id, opFields('Absent', me.home_shift, opDate), 'Saved: you will be ABSENT on ' + niceDate(opDate) + '.');
+        if (act === 'overtime') save(me.id, opFields('Overtime', document.getElementById('ot-shift').value, opDate), 'Saved: your overtime interest is noted.');
+        if (act === 'clear') save(me.id, { attendance: 'Not marked', duty_date: null, duty_shift: null, status: 'Open' }, 'Your overtime interest is withdrawn.');
+      } else if (role === 'incharge') {
+        if (act === 'shift') { inShift = btn.getAttribute('data-val'); renderIncharge(); }
+        else if (card) {
+          var op = byId(card.getAttribute('data-id'));
+          save(op.id, opFields(act === 'present' ? 'Present' : 'Absent', op.home_shift, inDate), 'Attendance saved for ' + op.name + '.');
+        }
+      }
+    });
+    document.getElementById('content').addEventListener('change', function (e) {
+      if (e.target.id === 'op-date') { opDate = e.target.value || opDate; renderOperator(); }
+      if (e.target.id === 'in-date') { inDate = e.target.value || inDate; renderIncharge(); }
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
