@@ -27,6 +27,9 @@
     <h2 id="alloc-title">Allocation</h2>
     <div class="card" id="alloc-list"><p class="muted">Loading...</p></div>
 
+    <h2>Free manpower</h2>
+    <div class="card" id="manpower"></div>
+
     <h2>Needs attention</h2>
     <div class="card" id="attention"></div>
 
@@ -108,14 +111,29 @@
           (x.overtime ? ' <span class="badge info">Overtime, Shift ' + x.operator.home_shift + '</span>' : '') +
           '<br><span class="muted">' + esc(x.operator.skill_group) + '</span></div>' +
           '<div class="arrow">drives</div>' +
-          '<div><b>' + esc(x.hemm.name) + '</b><br><span class="muted">' + esc(x.hemm.make_model) + '</span></div></div>';
+          '<div><b>' + esc(x.hemm.name) + '</b>' +
+          (x.expected ? ' <span class="badge warn">Expected OK by ' + niceTime(x.hemm.expected_ok_at) + '</span>' : '') +
+          '<br><span class="muted">' + esc(x.hemm.make_model) + '</span></div></div>';
       }).join('') : '<p class="muted">No allocation yet. It appears when operators mark Present (or Overtime) and machines are OK.</p>';
+
+      // Free manpower: operators present but with no machine, and what they can do.
+      var kindBadge = { wait: '<span class="badge warn">Wait</span>', ask: '<span class="badge none">Ask engineer</span>', free: '<span class="badge good">Free for other work</span>' };
+      document.getElementById('manpower').innerHTML = a.idleOperators.length ? a.idleOperators.map(function (x) {
+        return '<div class="row"><div class="grow"><b>' + esc(x.operator.name) + '</b> <span class="muted">(' + esc(x.operator.skill_group) + ')</span><br>' +
+          '<span class="muted">' + esc(x.advice) + '</span></div>' + kindBadge[x.kind] + '</div>';
+      }).join('') : '<p class="muted">Every present operator has a machine.</p>';
 
       var att = '';
       if (a.idleHemms.length) att += '<h3>OK machines waiting for an operator</h3><p>' + a.idleHemms.map(function (h) { return esc(h.name); }).join(', ') + '</p>';
-      if (a.idleOperators.length) att += '<h3>Operators with no machine</h3><p>' + a.idleOperators.map(function (x) { return esc(x.operator.name) + ' (' + esc(x.operator.skill_group) + ')'; }).join(', ') + '</p>';
-      if (a.notFit.length) att += '<h3>Machines not fit</h3>' + a.notFit.map(function (h) {
-        return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b><br><span class="muted">' + esc(h.location) + ' &middot; urgency ' + esc(h.urgency) + (h.remarks ? ' &middot; ' + esc(h.remarks) : '') + '</span></div>' +
+      if (a.overtimeNotAllotted.length) att += '<h3>Overtime interest (not given machines)</h3><p class="muted">Overtime costs extra, so the tool does not allot these operators. The Shift Incharge decides.</p><p>' +
+        a.overtimeNotAllotted.map(function (o) { return esc(o.name) + ' (' + esc(o.skill_group) + ', home Shift ' + o.home_shift + ')'; }).join(', ') + '</p>';
+      if (a.comingBack.length) att += '<h3>Machines expected back during this shift</h3>' + a.comingBack.map(function (h) {
+        return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b></div><span class="badge warn">OK by ' + niceTime(h.expected_ok_at) + '</span></div>';
+      }).join('');
+      if (a.notFit.length) att += '<h3>Machines not fit now</h3>' + a.notFit.map(function (h) {
+        return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b><br><span class="muted">' + esc(h.location) + ' &middot; urgency ' + esc(h.urgency) +
+          (h.expected_ok_at ? ' &middot; expected OK ' + niceTime(h.expected_ok_at) + ' (' + etaFromNow(h.expected_ok_at) + ')' : ' &middot; expected OK time not given') +
+          (h.remarks ? ' &middot; ' + esc(h.remarks) : '') + '</span></div>' +
           '<span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span></div>';
       }).join('');
       document.getElementById('attention').innerHTML = att || '<p>Nothing needs attention.</p>';
