@@ -1,32 +1,273 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Team tool - coming soon</title>
+  <title>Lajkura OCP - Dispatch Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Supabase JS Client (Ready for your config.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
-    body { font-family: Arial, sans-serif; color: #1f2937;
-           max-width: 640px; margin: 40px auto; padding: 0 16px; }
-    .box { border: 2px dashed #c2410c; border-radius: 12px; padding: 20px; }
-    .ok { color: #047857; font-weight: bold; }
-    .warn { color: #b45309; font-weight: bold; }
+    body {
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+      color: #f3f4f6;
+      min-height: 100vh;
+    }
+    .glass-panel {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+    }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+    
+    /* Dark mode select dropdown styling */
+    select option { background: #1e293b; color: white; }
   </style>
 </head>
-<body>
-  <div class="box">
-    <h1>Our team's tool is coming soon</h1>
-    <p>This placeholder page will be replaced in Phase 1 of the workshop.</p>
-    <p id="config-check">Checking database settings...</p>
+<body class="p-6 font-sans antialiased flex flex-col items-center">
+
+  <div class="w-full max-w-7xl space-y-6">
+    
+    <!-- Header -->
+    <header class="glass-panel p-6 rounded-2xl flex justify-between items-center">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight text-white">Lajkura OCP Dispatch</h1>
+        <p class="text-sm text-gray-400 mt-1">Maintenance Clearance & Shift Allocation</p>
+      </div>
+      <div id="db-status" class="text-sm px-4 py-2 rounded-full border border-emerald-700 text-emerald-400 bg-emerald-900/30">
+        System Ready
+      </div>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      
+      <!-- Panel 1: Maintenance Engineer -->
+      <div class="glass-panel p-5 rounded-2xl flex flex-col h-[32rem]">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-semibold">HEMM Fleet</h2>
+          <span class="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded">Maintenance Eng.</span>
+        </div>
+        
+        <!-- Add HEMM Form -->
+        <form onsubmit="addHemm(event)" class="flex gap-2 mb-4">
+          <input type="text" id="new-hemm" placeholder="E.g., BH100-04" required
+            class="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 text-white placeholder-gray-500">
+          <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors">Add</button>
+        </form>
+
+        <div id="hemm-list" class="flex-1 overflow-y-auto space-y-2 pr-1">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Panel 2: Shift Incharge - Roster -->
+      <div class="glass-panel p-5 rounded-2xl flex flex-col h-[32rem]">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-semibold">Operator Roster</h2>
+          <span class="text-xs bg-purple-500/20 text-purple-300 px-2 py-1 rounded">Shift Incharge</span>
+        </div>
+
+        <!-- Add Operator Form -->
+        <form onsubmit="addOperator(event)" class="flex gap-2 mb-4">
+          <input type="text" id="new-operator" placeholder="E.g., Manoj D." required
+            class="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-purple-500 text-white placeholder-gray-500">
+          <button type="submit" class="bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors">Add</button>
+        </form>
+
+        <div id="operator-list" class="flex-1 overflow-y-auto space-y-2 pr-1">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Panel 3: Shift Incharge - Dispatch -->
+      <div class="glass-panel p-5 rounded-2xl flex flex-col h-[32rem] border-t-4 border-t-emerald-500">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-semibold">Active Dispatch</h2>
+          <span class="text-xs bg-emerald-500/20 text-emerald-300 px-2 py-1 rounded">Shift Incharge</span>
+        </div>
+
+        <!-- Manual Allocation Form -->
+        <form onsubmit="allocate(event)" class="space-y-3 mb-6 p-4 rounded-xl bg-white/5 border border-emerald-500/20">
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Select Operator (Present)</label>
+            <select id="select-operator" required class="w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+              <!-- Populated by JS -->
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Select HEMM (Cleared OK)</label>
+            <select id="select-hemm" required class="w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+              <!-- Populated by JS -->
+            </select>
+          </div>
+          <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-lg transition-all shadow-lg shadow-emerald-900/20">
+            Confirm Assignment
+          </button>
+        </form>
+
+        <div id="allocation-list" class="flex-1 overflow-y-auto space-y-2 pr-1">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+    </div>
   </div>
-  <script src="config.js"></script>
+
   <script>
-    var el = document.getElementById("config-check");
-    var url = window.SUPABASE_URL || "";
-    var key = window.SUPABASE_PUBLISHABLE_KEY || "";
-    var ready = url.indexOf("PASTE") === -1 && key.indexOf("sb_publishable_") === 0;
-    el.textContent = ready ? "Database settings: filled in \u2713"
-                           : "Database settings: not filled in yet (this is normal before Phase 1)";
-    el.className = ready ? "ok" : "warn";
+    // --- STATE MANAGEMENT ---
+    // In Phase 2, these will be replaced by Supabase real-time subscriptions
+    let hemms = [
+      { id: "BH100-01", isOk: true },
+      { id: "BH50M-01", isOk: false }
+    ];
+
+    let operators = [
+      { id: "OP-101", name: "Ramesh M.", isPresent: true },
+      { id: "OP-102", name: "Suresh K.", isPresent: false }
+    ];
+
+    let allocations = []; // Array of { operatorId, hemmId }
+
+    // --- RENDER FUNCTIONS ---
+    function renderApp() {
+      renderHemms();
+      renderOperators();
+      renderDispatch();
+    }
+
+    function renderHemms() {
+      const container = document.getElementById('hemm-list');
+      container.innerHTML = hemms.map((h, i) => {
+        const isAllocated = allocations.some(a => a.hemmId === h.id);
+        return `
+        <label class="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-transparent transition-colors ${h.isOk ? 'border-blue-500/30' : ''} ${isAllocated ? 'opacity-50 pointer-events-none' : 'cursor-pointer hover:bg-white/10'}">
+          <div class="flex items-center gap-3">
+            <input type="checkbox" ${h.isOk ? 'checked' : ''} onchange="toggleHemm(${i})" 
+              class="w-4 h-4 rounded text-blue-500 bg-gray-700 border-gray-600 focus:ring-blue-500" ${isAllocated ? 'disabled' : ''}>
+            <span class="font-medium">${h.id}</span>
+          </div>
+          ${isAllocated ? '<span class="text-xs text-emerald-400">Deployed</span>' : (h.isOk ? '<span class="text-xs text-blue-400">Ready</span>' : '<span class="text-xs text-orange-400">Breakdown</span>')}
+        </label>
+      `}).join('');
+    }
+
+    function renderOperators() {
+      const container = document.getElementById('operator-list');
+      container.innerHTML = operators.map((o, i) => {
+        const isAllocated = allocations.some(a => a.operatorId === o.id);
+        return `
+        <label class="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-transparent transition-colors ${o.isPresent ? 'border-purple-500/30' : ''} ${isAllocated ? 'opacity-50 pointer-events-none' : 'cursor-pointer hover:bg-white/10'}">
+          <div class="flex items-center gap-3">
+            <input type="checkbox" ${o.isPresent ? 'checked' : ''} onchange="toggleOperator(${i})" 
+              class="w-4 h-4 rounded text-purple-500 bg-gray-700 border-gray-600 focus:ring-purple-500" ${isAllocated ? 'disabled' : ''}>
+            <span class="font-medium">${o.name}</span>
+          </div>
+          ${isAllocated ? '<span class="text-xs text-emerald-400">On Duty</span>' : (o.isPresent ? '<span class="text-xs text-purple-400">Available</span>' : '<span class="text-xs text-gray-500">Absent</span>')}
+        </label>
+      `}).join('');
+    }
+
+    function renderDispatch() {
+      // 1. Update Dropdowns
+      const opSelect = document.getElementById('select-operator');
+      const hemmSelect = document.getElementById('select-hemm');
+      
+      const availableOps = operators.filter(o => o.isPresent && !allocations.some(a => a.operatorId === o.id));
+      const availableHemms = hemms.filter(h => h.isOk && !allocations.some(a => a.hemmId === h.id));
+
+      opSelect.innerHTML = availableOps.length ? availableOps.map(o => `<option value="${o.id}">${o.name}</option>`).join('') : '<option value="">No available operators</option>';
+      hemmSelect.innerHTML = availableHemms.length ? availableHemms.map(h => `<option value="${h.id}">${h.id}</option>`).join('') : '<option value="">No cleared equipment</option>';
+
+      // Disable button if missing pairs
+      const btn = document.querySelector('form[onsubmit="allocate(event)"] button');
+      btn.disabled = !availableOps.length || !availableHemms.length;
+      btn.className = btn.disabled 
+        ? "w-full bg-gray-600 text-gray-400 font-medium py-2 rounded-lg cursor-not-allowed"
+        : "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-lg transition-all shadow-lg shadow-emerald-900/20";
+
+      // 2. Render Active Allocations List
+      const container = document.getElementById('allocation-list');
+      if(allocations.length === 0) {
+        container.innerHTML = '<div class="text-center text-sm text-gray-500 mt-4">No active dispatches.</div>';
+        return;
+      }
+
+      container.innerHTML = allocations.map((a, i) => {
+        const op = operators.find(o => o.id === a.operatorId);
+        return `
+        <div class="flex items-center justify-between p-3 rounded-xl bg-emerald-900/20 border border-emerald-500/30">
+          <div class="flex flex-col">
+            <span class="font-medium text-emerald-50">${op ? op.name : a.operatorId}</span>
+            <span class="text-xs text-emerald-400 text-left">Driving: ${a.hemmId}</span>
+          </div>
+          <button onclick="revoke(${i})" class="text-xs bg-red-500/20 hover:bg-red-500/40 text-red-300 px-3 py-1.5 rounded-lg transition-colors">
+            End Shift
+          </button>
+        </div>
+      `}).join('');
+    }
+
+    // --- ACTIONS ---
+    function addHemm(e) {
+      e.preventDefault();
+      const input = document.getElementById('new-hemm');
+      const val = input.value.trim().toUpperCase();
+      if(val && !hemms.some(h => h.id === val)) {
+        hemms.push({ id: val, isOk: true }); // Default to true when newly added
+        // SUPABASE TODO: await supabase.from('hemms').insert([{ id: val, is_ok: true }])
+        input.value = '';
+        renderApp();
+      }
+    }
+
+    function addOperator(e) {
+      e.preventDefault();
+      const input = document.getElementById('new-operator');
+      const val = input.value.trim();
+      if(val) {
+        const newId = 'OP-' + Math.floor(Math.random() * 1000); // Temporary ID generator
+        operators.push({ id: newId, name: val, isPresent: true });
+        // SUPABASE TODO: await supabase.from('operators').insert([{ name: val, is_present: true }])
+        input.value = '';
+        renderApp();
+      }
+    }
+
+    function toggleHemm(index) {
+      hemms[index].isOk = !hemms[index].isOk;
+      // SUPABASE TODO: await supabase.from('hemms').update({ is_ok: hemms[index].isOk }).eq('id', hemms[index].id)
+      renderApp();
+    }
+
+    function toggleOperator(index) {
+      operators[index].isPresent = !operators[index].isPresent;
+      // SUPABASE TODO: await supabase.from('operators').update({ is_present: operators[index].isPresent }).eq('id', operators[index].id)
+      renderApp();
+    }
+
+    function allocate(e) {
+      e.preventDefault();
+      const opId = document.getElementById('select-operator').value;
+      const hemmId = document.getElementById('select-hemm').value;
+      
+      if(opId && hemmId) {
+        allocations.push({ operatorId: opId, hemmId: hemmId });
+        // SUPABASE TODO: await supabase.from('allocations').insert([{ operator_id: opId, hemm_id: hemmId }])
+        renderApp();
+      }
+    }
+
+    function revoke(index) {
+      // SUPABASE TODO: await supabase.from('allocations').delete().eq('id', allocations[index].db_id)
+      allocations.splice(index, 1);
+      renderApp();
+    }
+
+    // Initialize
+    renderApp();
   </script>
 </body>
 </html>
