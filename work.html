@@ -90,17 +90,26 @@
           '<div><label>Location</label><select data-f="location">' + LOCATIONS.map(function (l) {
             return '<option' + (l === h.location ? ' selected' : '') + '>' + l + '</option>'; }).join('') + '</select></div>' +
           '<div><label>Repair urgency</label><select data-f="urgency">' + ['Low', 'Medium', 'High'].map(function (u) {
-            return '<option' + (u === h.urgency ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select></div></div>' +
+            return '<option' + (u === h.urgency ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select></div>' +
+          '<div><label>Breakdown chance per shift</label><select data-f="bprob">' + breakdownChoices(h).map(function (n) {
+            return '<option value="' + n + '"' + (n === breakdownProbOf(h) ? ' selected' : '') + '>' + n + ' %</option>'; }).join('') + '</select></div></div>' +
           '<label>Remarks (optional)</label><input type="text" data-f="remarks" maxlength="200" value="' + esc(h.remarks || '') + '" placeholder="e.g. hydraulic hose leak">' +
-          '<button class="btn secondary" data-act="details">Save time, location, urgency and remarks</button></div>';
+          '<button class="btn secondary" data-act="details">Save time, location, urgency, breakdown chance and remarks</button></div>';
       });
       document.getElementById('content').innerHTML = html;
+    }
+    function breakdownChoices(h) {
+      var cur = breakdownProbOf(h);
+      var list = BREAKDOWN_CHOICES.slice();
+      if (list.indexOf(cur) < 0) { list.push(cur); list.sort(function (a, b) { return a - b; }); }
+      return list;
     }
     function engineerFields(card, status) {
       var f = {
         location: card.querySelector('[data-f=location]').value,
         urgency: card.querySelector('[data-f=urgency]').value,
-        remarks: card.querySelector('[data-f=remarks]').value.trim() || null
+        remarks: card.querySelector('[data-f=remarks]').value.trim() || null,
+        breakdown_prob: parseFloat(card.querySelector('[data-f=bprob]').value)
       };
       var eta = card.querySelector('[data-f=eta]').value;
       if (status === 'Resolved') f.expected_ok_at = null;          // machine is OK, no waiting time
@@ -122,7 +131,9 @@
       var info = currentShiftInfo();
       if (!opDate) opDate = info.date;
       var mine = me.duty_date === opDate ? me : null;   // my mark for the chosen date
-      var attendance = mine ? mine.attendance : 'Not marked';
+      var reason = leaveReason(me, opDate);             // 'Weekly off', 'Leave' or null
+      var att0 = mine ? mine.attendance : 'Not marked';
+      var attendance = (reason && !(att0 === 'Overtime' && reason === 'Weekly off')) ? 'Off' : att0;
       var others = SHIFTS.filter(function (s) { return s !== me.home_shift; });
 
       // Which shift and machine do I have for this date?
@@ -141,6 +152,7 @@
       var badge = attendance === 'Present' ? '<span class="badge good">Present, Shift ' + me.home_shift + '</span>' :
         attendance === 'Absent' ? '<span class="badge bad">Absent, Shift ' + me.home_shift + '</span>' :
         attendance === 'Overtime' ? '<span class="badge info">Overtime interest, Shift ' + mine.duty_shift + '</span>' :
+        attendance === 'Off' ? '<span class="badge warn">' + reason + ': not on duty</span>' :
         '<span class="badge none">Not marked</span>';
 
       document.getElementById('content').innerHTML =
@@ -149,14 +161,33 @@
         '<label for="op-date">Duty date</label><input type="date" id="op-date" value="' + opDate + '">' +
         '<div class="card"><p>Your answer for ' + niceDate(opDate) + ': ' + badge + '</p>' + machineText + '</div>' +
         '<h2>My own shift (Shift ' + me.home_shift + ')</h2>' +
-        '<div class="btn-row"><button class="btn good' + (attendance === 'Present' ? ' on' : '') + '" data-act="present">I will be PRESENT</button>' +
-        '<button class="btn bad' + (attendance === 'Absent' ? ' on' : '') + '" data-act="absent">I will be ABSENT</button></div>' +
+        (reason
+          ? '<div class="msg info">' + reason + ' on ' + niceDate(opDate) + '. You are not counted for duty on this date.</div>'
+          : '<div class="btn-row"><button class="btn good' + (attendance === 'Present' ? ' on' : '') + '" data-act="present">I will be PRESENT</button>' +
+            '<button class="btn bad' + (attendance === 'Absent' ? ' on' : '') + '" data-act="absent">I will be ABSENT</button></div>') +
         '<h2>Overtime in another shift</h2>' +
         '<p class="muted">Want extra duty? Choose a shift that is not yours. Your answer for this date is replaced.</p>' +
         '<label for="ot-shift">Shift</label><select id="ot-shift">' + others.map(function (s) {
           return '<option value="' + s + '"' + (mine && mine.duty_shift === s ? ' selected' : '') + '>Shift ' + s + ' (' + SHIFT_TIMES[s] + ')</option>'; }).join('') + '</select>' +
-        '<button class="btn warn' + (attendance === 'Overtime' ? ' on' : '') + '" data-act="overtime">I am interested in overtime</button>' +
-        (attendance === 'Overtime' ? '<button class="btn secondary" data-act="clear">Withdraw my overtime interest</button>' : '');
+        (reason === 'Leave'
+          ? '<div class="msg info">You marked leave on this date, so overtime is not possible.</div>'
+          : '<button class="btn warn' + (attendance === 'Overtime' ? ' on' : '') + '" data-act="overtime">I am interested in overtime</button>') +
+        (attendance === 'Overtime' ? '<button class="btn secondary" data-act="clear">Withdraw my overtime interest</button>' : '') +
+        leaveSection(me);
+    }
+    function leaveSection(me) {
+      var today = dateToStr(new Date());
+      var upcoming = (me.leave_dates || []).filter(function (d) { return d >= today; }).sort();
+      return '<h2>Weekly off and leave</h2><div class="card">' +
+        '<p>Your weekly off day: <b>' + (me.weekly_off == null ? 'not set' : DAY_NAMES[me.weekly_off]) + '</b></p>' +
+        '<p class="muted">About ' + EXTRA_LEAVE_DAYS + ' more leave days a month are expected, besides the weekly off. Marking a day here in advance helps the tool plan.</p>' +
+        '<label for="lv-date">A day you will NOT be present</label><input type="date" id="lv-date" min="' + today + '">' +
+        '<button class="btn warn" data-act="addleave">Add leave day</button>' +
+        '<h3>My marked leave days</h3>' +
+        (upcoming.length ? upcoming.map(function (d) {
+          return '<div class="row"><div class="grow"><b>' + niceDate(d) + '</b> <span class="muted">' + DAY_NAMES[weekdayOf(d)] + '</span></div>' +
+            '<button class="btn secondary" style="width:auto;margin:0" data-act="rmleave" data-val="' + d + '">Remove</button></div>';
+        }).join('') : '<p class="muted">No leave days marked.</p>') + '</div>';
     }
     function opFields(att, shift, date) {
       return { attendance: att, duty_date: date, duty_shift: shift, status: att === 'Overtime' ? 'In progress' : 'Resolved' };
@@ -178,10 +209,12 @@
         '<h2>Shift ' + inShift + ' operators</h2><div class="card">';
       ops.forEach(function (o) {
         var att = o.duty_date === inDate ? o.attendance : 'Not marked';
+        var why = leaveReason(o, inDate);
         html += '<div class="row" data-id="' + esc(o.id) + '"><div class="grow"><b>' + esc(o.name) + '</b><br><span class="muted">' + esc(o.skill_group) + '</span></div>' +
-          '<span class="badge ' + (att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : att === 'Overtime' ? 'info' : 'none') + '">' + att + '</span>' +
-          '<div class="btn-row" style="width:100%"><button class="btn good' + (att === 'Present' ? ' on' : '') + '" data-act="present">Present</button>' +
-          '<button class="btn bad' + (att === 'Absent' ? ' on' : '') + '" data-act="absent">Absent</button></div></div>';
+          (why ? '<span class="badge warn">' + why + '</span>'
+               : '<span class="badge ' + (att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : att === 'Overtime' ? 'info' : 'none') + '">' + att + '</span>' +
+                 '<div class="btn-row" style="width:100%"><button class="btn good' + (att === 'Present' ? ' on' : '') + '" data-act="present">Present</button>' +
+                 '<button class="btn bad' + (att === 'Absent' ? ' on' : '') + '" data-act="absent">Absent</button></div>') + '</div>';
       });
       html += '</div>';
       var ot = records.filter(function (r) { return r.record_type === 'OPERATOR' && r.attendance === 'Overtime' && r.duty_date === inDate && r.duty_shift === inShift; });
@@ -212,6 +245,19 @@
         if (act === 'present') save(me.id, opFields('Present', me.home_shift, opDate), 'Saved: you will be PRESENT on ' + niceDate(opDate) + '.');
         if (act === 'absent') save(me.id, opFields('Absent', me.home_shift, opDate), 'Saved: you will be ABSENT on ' + niceDate(opDate) + '.');
         if (act === 'overtime') save(me.id, opFields('Overtime', document.getElementById('ot-shift').value, opDate), 'Saved: your overtime interest is noted.');
+        if (act === 'addleave') {
+          var lv = document.getElementById('lv-date').value;
+          var todayStr = dateToStr(new Date());
+          if (!lv) { showMessage('Please choose a day first.', 'info'); return; }
+          if (lv < todayStr) { showMessage('Please choose today or a day in the future.', 'info'); return; }
+          var list = (me.leave_dates || []).filter(function (d) { return d >= todayStr && d !== lv; });
+          list.push(lv); list.sort();
+          save(me.id, { leave_dates: list }, 'Leave day added: ' + niceDate(lv) + '.');
+        }
+        if (act === 'rmleave') {
+          var gone = btn.getAttribute('data-val');
+          save(me.id, { leave_dates: (me.leave_dates || []).filter(function (d) { return d !== gone; }) }, 'Leave day removed.');
+        }
         if (act === 'clear') save(me.id, { attendance: 'Not marked', duty_date: null, duty_shift: null, status: 'Open' }, 'Your overtime interest is withdrawn.');
       } else if (role === 'incharge') {
         if (act === 'shift') { inShift = btn.getAttribute('data-val'); renderIncharge(); }
