@@ -100,9 +100,45 @@
           '<div><label>Breakdown chance per shift</label><select data-f="bprob">' + breakdownChoices(h).map(function (n) {
             return '<option value="' + n + '"' + (n === breakdownProbOf(h) ? ' selected' : '') + '>' + n + ' %</option>'; }).join('') + '</select></div></div>' +
           '<label>Remarks (optional)</label><input type="text" data-f="remarks" maxlength="200" value="' + esc(h.remarks || '') + '" placeholder="e.g. hydraulic hose leak">' +
-          '<button class="btn secondary" data-act="details">Save time, location, urgency, breakdown chance and remarks</button></div>';
+          '<button class="btn secondary" data-act="details">Save time, location, urgency, breakdown chance and remarks</button>' +
+          '<details class="help"' + (h.maint_start ? ' open' : '') + '><summary>Planned maintenance' + (h.maint_start ? ': ' + niceTime(h.maint_start) + ', ' + (maintWindow(h).hours) + ' h' : '') + '</summary>' + maintForm(h) + '</details></div>';
       });
       document.getElementById('content').innerHTML = html + '</div>';
+    }
+    function toLocalInput(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      return dateToStr(d) + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    }
+    function maintForm(h) {
+      var w = maintWindow(h);
+      var tasks = MAINT_TASKS.slice();
+      if (h.maint_task && tasks.indexOf(h.maint_task) < 0) tasks.push(h.maint_task);
+      var hoursList = [4, 6, 8, 12, 16, 24, 36, 48, 72];
+      if (w && hoursList.indexOf(w.hours) < 0) { hoursList.push(w.hours); hoursList.sort(function (a, b) { return a - b; }); }
+      var advice = w ? maintenanceAdvice(records, h) : null;
+      return (advice ? '<div class="msg ' + (advice.verdict === 'keep' || advice.status !== 'planned' ? 'info' : 'warn') + '">' + maintVerdictText(advice) +
+                (advice.clash && advice.clash.length ? '<br><b>Clash:</b> ' + esc(advice.clash.join(', ')) + ' is also out at the same time. Move only one of them.' : '') + '</div>' : '<p class="muted">No maintenance planned for this machine.</p>') +
+        '<label>Work to be done</label><select data-m="task">' + tasks.map(function (t) { return '<option' + (t === h.maint_task ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('') + '</select>' +
+        '<div class="field-grid"><div><label>Starts</label><input type="datetime-local" data-m="start" value="' + toLocalInput(h.maint_start) + '"></div>' +
+        '<div><label>Stays out for</label><select data-m="hours">' + hoursList.map(function (n) { return '<option value="' + n + '"' + (w && w.hours === n ? ' selected' : '') + '>' + n + ' hours</option>'; }).join('') + '</select></div></div>' +
+        '<label>Latest safe start (optional)</label><input type="datetime-local" data-m="due" value="' + toLocalInput(h.maint_due) + '">' +
+        '<p class="muted">A start after this time adds ' + RISK_PER_OVERDUE_DAY + '% to the breakdown chance for each late day. The dashboard uses it to suggest preponing or postponing.</p>' +
+        '<div class="btn-row"><button class="btn" data-act="mplan">Save maintenance plan</button>' +
+        (h.maint_start ? '<button class="btn secondary" data-act="mclear">Clear plan</button>' : '') + '</div>';
+    }
+    function maintFields(card) {
+      var startV = card.querySelector('[data-m=start]').value, dueV = card.querySelector('[data-m=due]').value;
+      if (!startV) return { error: 'Please choose when the maintenance starts.' };
+      var start = new Date(startV), due = dueV ? new Date(dueV) : null;
+      if (start.getTime() < Date.now()) return { error: 'The start must be in the future. Use the status buttons above for a machine that is down now.' };
+      if (due && due.getTime() < start.getTime()) return { error: 'The latest safe start cannot be before the start. Leave it empty if there is no limit.' };
+      return { fields: {
+        maint_task: card.querySelector('[data-m=task]').value,
+        maint_start: start.toISOString(),
+        maint_hours: parseFloat(card.querySelector('[data-m=hours]').value),
+        maint_due: due ? due.toISOString() : null
+      } };
     }
     function breakdownChoices(h) {
       var cur = breakdownProbOf(h);
@@ -311,6 +347,12 @@
           save(id, f, 'Machine status saved.');
         } else if (act === 'details') {
           save(id, engineerFields(card, null), 'Details saved.');
+        } else if (act === 'mplan') {
+          var mf = maintFields(card);
+          if (mf.error) { showMessage(mf.error, 'warn'); return; }
+          save(id, mf.fields, 'Maintenance plan saved.');
+        } else if (act === 'mclear') {
+          save(id, { maint_task: null, maint_start: null, maint_hours: null, maint_due: null }, 'Maintenance plan cleared.');
         }
       } else if (role === 'operator') {
         var me = byId(getOperatorId());
