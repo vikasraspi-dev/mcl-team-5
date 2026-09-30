@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#4d5b6e">
+  <title>Login - HEMM Shift Allocator</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</head>
+<body>
+  <header id="site-header"></header>
+  <main>
+    <div class="login-box">
+      <section class="hero">
+        <h1>Login</h1>
+        <p>The Mine Manager and the Maintenance Engineer log in with an email and a password. Operators choose their name. Everyone can look at the dashboard without logging in.</p>
+      </section>
+
+      <div id="message" class="hidden"></div>
+      <div id="already"></div>
+
+      <h2>Who are you?</h2>
+      <button class="btn role-btn" id="pick-manager"><span id="ic1"></span><span>Mine Manager<small>Log in to manage operators.</small></span></button>
+      <button class="btn role-btn" id="pick-engineer"><span id="ic2"></span><span>Maintenance Engineer<small>Log in to control the HEMMs.</small></span></button>
+      <button class="btn role-btn" id="pick-operator"><span id="ic3"></span><span>Operator<small>Choose your name. No password.</small></span></button>
+      <a class="btn secondary" href="index.html">Just look at the dashboard</a>
+
+      <form id="login-form" class="card hidden" autocomplete="on">
+        <h3 id="login-title">Log in</h3>
+        <label for="email">Email</label>
+        <input type="text" id="email" name="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password">
+        <button class="btn" type="submit" id="login-go">Log in</button>
+      </form>
+
+      <div id="operator-pick" class="card hidden">
+        <label for="operator-select">Who are you?</label>
+        <select id="operator-select"><option value="">Loading names...</option></select>
+        <button class="btn" id="operator-go">Continue</button>
+      </div>
+
+      <details class="help">
+        <summary>For the Data Keeper: how to create the two logins</summary>
+        <ol>
+          <li>In Supabase open <b>Authentication &gt; Users &gt; Add user</b>. Create one user for the Mine Manager and one for the Maintenance Engineer. Give each an email and a password. Tick <b>Auto Confirm User</b>.</li>
+          <li>Open <code class="inline">database/06-set-login-roles.sql</code>, put the two emails in it, and run it in the SQL Editor. This tells the tool which login is the manager and which is the engineer.</li>
+          <li>Optional: run <code class="inline">database/07-optional-lock-machines.sql</code>. Without it, the login only hides the screens. With it, the database itself refuses changes from anyone who is not logged in.</li>
+        </ol>
+      </details>
+    </div>
+  </main>
+
+  <script>
+    renderHeader('login.html');
+    document.getElementById('ic1').innerHTML = icon('groups');
+    document.getElementById('ic2').innerHTML = icon('work');
+    document.getElementById('ic3').innerHTML = icon('person');
+    var chosen = null;      // 'manager' or 'engineer'
+
+    // Sidebar lists (best effort: the login page still works if the data cannot be loaded)
+    loadRecords().then(renderSidebar).catch(function () {});
+
+    // Already logged in?
+    (async function () {
+      var user = await getAuthUser();
+      var role = authRoleOf(user);
+      if (user && ROLE_NAMES[role]) {
+        document.getElementById('already').innerHTML =
+          '<div class="msg ok">You are logged in as <b>' + esc(ROLE_NAMES[role]) + '</b> (' + esc(user.email || '') + '). ' +
+          '<a href="work.html">Go to My Work</a></div><button class="btn secondary" id="logout-now">Log out</button>';
+        document.getElementById('logout-now').onclick = signOutNow;
+      } else if (user) {
+        document.getElementById('already').innerHTML =
+          '<div class="msg err">You are logged in as ' + esc(user.email || '') + ', but this login has no role yet. Ask the Data Keeper to run database/06-set-login-roles.sql.</div>' +
+          '<button class="btn secondary" id="logout-now">Log out</button>';
+        document.getElementById('logout-now').onclick = signOutNow;
+      }
+    })();
+
+    function pickLogin(role) {
+      chosen = role;
+      clearMessage();
+      document.getElementById('operator-pick').classList.add('hidden');
+      var f = document.getElementById('login-form');
+      f.classList.remove('hidden');
+      document.getElementById('login-title').textContent = 'Log in as ' + ROLE_NAMES[role];
+      f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('email').focus();
+    }
+    document.getElementById('pick-manager').onclick = function () { pickLogin('manager'); };
+    document.getElementById('pick-engineer').onclick = function () { pickLogin('engineer'); };
+
+    document.getElementById('login-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var email = document.getElementById('email').value.trim();
+      var password = document.getElementById('password').value;
+      if (!email || !password) { showMessage('Please type your email and password.', 'info'); return; }
+      var go = document.getElementById('login-go');
+      go.disabled = true;
+      try {
+        if (dbSetupError || !db) throw (dbSetupError || new Error('Database link is not ready.'));
+        var res = await db.auth.signInWithPassword({ email: email, password: password });
+        if (res.error) throw res.error;
+        var role = authRoleOf(res.data.user);
+        if (!role) {
+          await db.auth.signOut();
+          showError('You are logged in, but this account has no role yet. Ask the Data Keeper to run database/06-set-login-roles.sql.');
+        } else if (role !== chosen) {
+          await db.auth.signOut();
+          showError('This account is a ' + (ROLE_NAMES[role] || role) + ' account, not a ' + ROLE_NAMES[chosen] + ' account. Please choose the right role above.');
+        } else {
+          store('hemm_role', role);
+          window.location.href = 'work.html';
+          return;
+        }
+      } catch (err) {
+        showError('Login failed. Please check the email and password.', err);
+      }
+      go.disabled = false;
+    });
+
+    // Operators: choose a name (no password)
+    document.getElementById('pick-operator').onclick = async function () {
+      clearMessage();
+      document.getElementById('login-form').classList.add('hidden');
+      var pick = document.getElementById('operator-pick');
+      pick.classList.remove('hidden');
+      var sel = document.getElementById('operator-select');
+      try {
+        var rows = await loadRecords();
+        var ops = rows.filter(function (r) { return r.record_type === 'OPERATOR'; });
+        if (!ops.length) {
+          sel.innerHTML = '<option value="">No operators found</option>';
+          showError('No operators were found in the database. Ask the Data Keeper to run database/01-setup.sql.');
+          return;
+        }
+        var saved = getOperatorId();
+        sel.innerHTML = SHIFTS.map(function (s) {
+          var list = ops.filter(function (o) { return o.home_shift === s; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+          return '<optgroup label="Shift ' + s + '">' + list.map(function (o) {
+            return '<option value="' + esc(o.id) + '"' + (o.id === saved ? ' selected' : '') + '>' + esc(o.name) + ' (' + esc(o.skill_group) + ')</option>';
+          }).join('') + '</optgroup>';
+        }).join('');
+        pick.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (err) {
+        sel.innerHTML = '<option value="">Could not load names</option>';
+        showError('Could not load the operator names.', err);
+      }
+    };
+    document.getElementById('operator-go').onclick = function () {
+      var id = document.getElementById('operator-select').value;
+      if (!id) { showMessage('Please choose your name first.', 'info'); return; }
+      store('hemm_operator_id', id);
+      store('hemm_role', 'operator');
+      window.location.href = 'work.html';
+    };
+  </script>
+</body>
+</html>

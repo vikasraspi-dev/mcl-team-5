@@ -9,8 +9,8 @@
   time. The Progress Log at the end of this file is our handover logbook.
 
 ## What we are building
-- A tool with at most 3 pages: index.html (entry page), dashboard.html
-  (dashboard) and at most one more page.
+- A tool with at most 3 pages: index.html (entry page, which is now the
+  dashboard), work.html (My Work) and login.html (login).
 - Every record has location, urgency (Low / Medium / High) and status
   (Open / In progress / Resolved), plus the columns in "Our tool" below.
 - All data is MADE UP. Never add real names, phone numbers, employee IDs or
@@ -31,7 +31,10 @@
 4. The Project URL and the publishable key live only in config.js. Never use
    or ask for a secret key, a service_role key or the database password.
 5. For charts, load Chart.js from the jsDelivr CDN.
-6. No login or sign-up. Anyone with the link can use the tool.
+6. Login: the Mine Manager and the Maintenance Engineer log in with email and
+   password (Supabase Auth, publishable key only, on login.html). The team asked
+   for this. Operators pick their name and need no password. Anyone can look at
+   the dashboard. There is no sign-up: the Data Keeper creates the two logins.
 7. You may not be able to reach our database. Do NOT try to test the database
    connection. Write the code; we test it on the live website.
 8. If anything fails, show a friendly message on the page that also includes
@@ -74,8 +77,11 @@
 - Team: MCL Team 5 (IIM Sambalpur MDP)
 - Tool name: HEMM Shift Allocator
 - Problem: Matching HEMMs (heavy machines) with operators shift by shift is done by hand. The tool does it automatically from the engineer's and operators' inputs.
-- Who records / who decides: Maintenance Engineer marks each HEMM OK / under repair / breakdown. Operators mark Present / Absent, or raise Overtime interest for another shift. Mine Manager (the role key in the code is still "incharge") manages the operators: marks an operator absent or present for any date and calls operators for overtime in advance. Operators show overtime interest, apply for leave on a calendar and see their duty.
-- "Roles" (not real logins, because rule 6 says no login): the user picks a role on index.html and it is remembered on that phone. Operators also pick their name.
+- Who records / who decides: Maintenance Engineer marks each HEMM OK / under repair / breakdown. Operators mark Present / Absent, or raise Overtime interest for another shift. Mine Manager manages the operators: marks an operator absent or present for any date and calls operators for overtime in advance. Operators show overtime interest, apply for leave on a calendar and see their duty.
+- Roles: Mine Manager and Maintenance Engineer log in on login.html (the role of a login is stored in the account, set by database/06-set-login-roles.sql).
+  Operators pick their name on login.html. work.html sends anyone who is not properly logged in back to login.html.
+  Optional database/07-optional-lock-machines.sql makes the database itself refuse machine changes from anyone but the logged-in engineer,
+  and absence / overtime-call changes from anyone but the logged-in manager.
 - Table name and columns: dispatch_records (one table; rows are either HEMM or OPERATOR).
   Columns: id, created_at, updated_at, record_type (HEMM/OPERATOR), name, skill_group (Excavator/Dumper/Grader-Sprinkler),
   hemm_type, make_model, serial_no (HEMM only), home_shift, attendance (Not marked/Present/Absent/Overtime),
@@ -100,8 +106,11 @@
   so one dumper at 100% efficiency = 48 trips = 768 m3 per shift (an operator with 90% efficiency does 90% of that). Dumpers haul only if an excavator is running. Uses operator efficiency (the excavator operator's efficiency scales the loading), breakdown chance, weekly off, marked leave,
   about 2 extra leave days a month, and the expected OK time of machines under repair. Overtime is not counted. All numbers are at the top of app.js.
 - Every save on My Work shows how the 30-day projection moved (increase / decrease / unchanged). The dashboard also shows a message if someone else changed it.
-- Pages: index.html = entry page (choose role); work.html = "My Work" (screen depends on role); dashboard.html = dashboard
-  (first the 30-day projection, then a production calendar; tap a day to see the allotment for that day).
+- Pages: index.html = entry page and dashboard (summary cards, 30-day projection with line/bar switch and what-if sliders,
+  production calendar where a tapped day shows its allotment, charts, tiles); work.html = "My Work" (screen depends on role);
+  login.html = login for manager and engineer, name picker for operators. Old dashboard.html was removed.
+- Side bar on every page: navigation, and lists of all machines and operators (tap one for details; type to search). It is a drawer on phones.
+- What-if sliders (dashboard): excavators, dumpers, excavator operators per shift, dumper operators per shift. They change only the screen.
   Shared files: style.css (Material Design look), app.js (database link, header and bottom menu, icons, allocation rule, projection).
   Look: Material style, colours "Stormy Morning" (slate #6B7A8F, orange #F7882F, yellow #F7C331, tan #DCC7AA), dark/light switch in the top bar (remembered on the phone),
   app bar on top, bottom menu on phones, tabs on wide screens, small dense grid tiles, calendars. Logo: put the official Mahanadi Coalfields logo in the top folder as logo.png; until then a plain MCL badge shows.
@@ -115,3 +124,4 @@
 - Phase 3 (Claude, session 1): (a) Each HEMM has a breakdown chance per shift (engineer can change it). (b) Each operator has one weekly off day and can mark leave days in advance on the My Work page; those days are never allotted. (c) Dashboard shows planned production for the selected shift and a 30-day projection (chart plus totals) based on 10 minutes per trip and 16 m3 per trip. Files changed: app.js, work.html, dashboard.html, new database/03-add-breakdown-and-leave.sql. Checked only with a stand-in database; the real Chart.js could not be loaded here, so the new chart is untested. Known problems: the projection treats one excavator as enough for all dumpers; the single excavator operator per shift is the main limit; weekly off days are made up and the operator cannot change them; the incharge cannot yet edit weekly off. Next step: Data Keeper runs database/03-add-breakdown-and-leave.sql BEFORE the site is updated, then test on the live site.
 - Phase 4 (Claude, session 1): (a) Made-up efficiency for the 21 operators and made-up leave days (2 or 3 each, within the next 30 days) in database/04-add-efficiency-and-dummy-leave.sql. (b) Allocation now picks the best combination: most efficient operators first, paired with the most reliable machines; projection and shift plan use efficiency. (c) Operator leave is now chosen on a calendar (tap days, Save; any number of days can be applied for; weekly off days and past days are locked). (d) Grid views of machines and operators on the dashboard; grid of machine cards for the engineer and operator cards for the incharge. (e) Whole site restyled in Material Design (style.css, header and bottom menu in app.js, all three pages). Checked only with a stand-in database; the real Chart.js could not be loaded here, so charts were never seen drawn. Known problems: leave has no approval step (anyone can mark any number of days); the calendar starts on the current month; efficiency and weekly off cannot yet be edited on the site. Next step: Data Keeper runs database/04-add-efficiency-and-dummy-leave.sql BEFORE the site is updated, then test on the live site.
 - Phase 5 (Claude, session 1): (a) New Mine Manager role (replaces the Shift Incharge screen): marks operators absent/present and calls them for overtime for any date; operators are on duty by default. (b) Operators only show overtime interest, apply for leave and see their duty; their Present/Absent buttons were removed. (c) Projection now uses the manager's absences and overtime calls; every save shows how much the projection went up or down. (d) Dashboard: 30-day projection first, then a production calendar (tap a day for its allotment); smaller, denser tiles. (e) Dark/light switch and Stormy Morning colours; logo slot (logo.png) top left. Files changed: app.js, style.css, index.html, work.html, dashboard.html, new database/05-add-manager-controls.sql. Checked only with a stand-in database; charts never seen drawn. Known problems: logo.png is not in the repo yet (badge shown); Stormy Morning hex codes were written from memory because Figma could not be opened; old attendance columns (attendance, duty_date, duty_shift) are now used only for overtime interest; no approval step for leave. Next step: Data Keeper runs database/05-add-manager-controls.sql BEFORE the site is updated; someone adds logo.png; test on the live site.
+- Phase 6 (Claude, session 1): (a) index.html is now the dashboard, laid out like the reference picture: side bar, pastel summary cards, chart cards. dashboard.html was removed. (b) Side bar on every page lists all machines and operators (tap for details, search box); drawer on phones. (c) More charts: production by shift, breakdown chance by machine, top operators by efficiency. (d) Projection chart has a Line / Bar switch (remembered). (e) What-if sliders for machines and manpower change the projection at once and say how much it moved. (f) New login.html: real Supabase Auth logins for Mine Manager and Maintenance Engineer; work.html requires them. Files changed: app.js, style.css, index.html, work.html, new login.html, new database/06-set-login-roles.sql and database/07-optional-lock-machines.sql. Checked only with a stand-in database and a pretend login; charts never seen drawn; SQL 06 and 07 could not be tested. Known problems: until the Data Keeper creates the two users and runs 06, nobody can log in as manager or engineer, so they cannot edit; without 07 the login only hides the screens (the database still accepts changes from anyone who knows the public key); logo.png still missing. Next step: Data Keeper creates the two users in Supabase (Authentication > Users), runs 06 (with the real emails), then optionally 07; test login on the live site.
