@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b57d0">
+  <meta name="theme-color" content="#4d5b6e">
   <title>My Work - HEMM Shift Allocator</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -43,11 +43,13 @@
       if (busy) return;
       busy = true;
       try {
+        var before = projectedTotal(records);
         await updateRecord(id, fields);
         records = await loadRecords();
+        var change = changeMessage(before, projectedTotal(records));
         calToggled = {};
         render();
-        showMessage(okText || 'Saved.', 'ok');
+        showMessage((okText || 'Saved.') + ' ' + change.text, change.kind);
       } catch (err) {
         showError('Sorry, the change could not be saved.', err);
       }
@@ -134,53 +136,46 @@
           '<div class="card"><p>Please choose your name first.</p><a class="btn" href="index.html">Choose my name</a></div>';
         return;
       }
-      var info = currentShiftInfo();
-      if (!opDate) opDate = info.date;
-      var mine = me.duty_date === opDate ? me : null;   // my mark for the chosen date
-      var reason = leaveReason(me, opDate);             // 'Weekly off', 'Leave' or null
-      var att0 = mine ? mine.attendance : 'Not marked';
-      var attendance = (reason && !(att0 === 'Overtime' && reason === 'Weekly off')) ? 'Off' : att0;
+      if (!opDate) opDate = currentShiftInfo().date;
+      var reason = leaveReason(me, opDate);               // 'Weekly off', 'Leave', 'Absent' or null
+      var called = overtimeCallShift(me, opDate);         // Shift letter if called for overtime that day
       var others = SHIFTS.filter(function (s) { return s !== me.home_shift; });
+      var interest = (me.attendance === 'Overtime' && me.duty_date === opDate) ? me.duty_shift : null;
 
-      // Which shift and machine do I have for this date?
-      var dutyShift = attendance === 'Overtime' ? mine.duty_shift : me.home_shift;
-      var machineText = '';
-      if (attendance === 'Present' || attendance === 'Overtime') {
+      // Status and machine for the chosen date
+      var statusText, machineText = '';
+      var dutyShift = me.home_shift;
+      if (called && !overtimeBlocked(me, opDate)) dutyShift = called;
+      if (reason && !(called && reason === 'Weekly off')) {
+        statusText = '<span class="badge warn">' + reason + ': not on duty</span>' +
+          (reason === 'Absent' ? ' <span class="muted">marked by the Mine Manager</span>' : '');
+      } else {
+        statusText = called ? '<span class="badge info">Overtime call: Shift ' + called + '</span>'
+                            : '<span class="badge good">On duty, Shift ' + me.home_shift + '</span>';
         var alloc = computeAllocation(records, opDate, dutyShift);
         var mineA = alloc.assignments.filter(function (a) { return a.operator.id === me.id; })[0];
-        machineText = (attendance === 'Overtime' && !mineA)
-          ? '<div class="msg info">Your overtime interest is noted. Overtime costs extra, so it is used only when there are more machines than operators. You have no machine for now.</div>'
-          : mineA
+        machineText = mineA
           ? '<div class="msg ok">Your machine for Shift ' + dutyShift + ': <b>' + esc(hemmLabel(mineA.hemm)) + '</b></div>'
-          : '<div class="msg info">No machine for you yet in Shift ' + dutyShift + '. A fit machine of your type is needed. Check again later.</div>';
+          : '<div class="msg info">No machine for you yet in Shift ' + dutyShift + '. Check again later.</div>';
       }
-
-      var badge = attendance === 'Present' ? '<span class="badge good">Present, Shift ' + me.home_shift + '</span>' :
-        attendance === 'Absent' ? '<span class="badge bad">Absent, Shift ' + me.home_shift + '</span>' :
-        attendance === 'Overtime' ? '<span class="badge info">Overtime interest, Shift ' + mine.duty_shift + '</span>' :
-        attendance === 'Off' ? '<span class="badge warn">' + reason + ': not on duty</span>' :
-        '<span class="badge none">Not marked</span>';
 
       var eff = Math.round(effOf(me) * 100);
       document.getElementById('content').innerHTML =
-        '<div class="card"><div class="head" style="display:flex;gap:12px;align-items:center">' + avatar(me.skill_group) +
+        '<div class="card"><div style="display:flex;gap:10px;align-items:center">' + avatar(me.skill_group) +
         '<div><h3>' + esc(me.name) + '</h3><span class="muted">Shift ' + me.home_shift + ' (' + SHIFT_TIMES[me.home_shift] + ') &middot; ' + esc(me.skill_group) + ' operator</span></div></div>' +
-        '<p class="muted" style="margin-top:10px">Efficiency ' + eff + '%</p><div class="meter"><i style="width:' + eff + '%"></i></div></div>' +
+        '<p class="muted" style="margin-top:8px">Efficiency ' + eff + '%</p><div class="meter"><i style="width:' + eff + '%"></i></div></div>' +
         '<label for="op-date">Duty date</label><input type="date" id="op-date" value="' + opDate + '">' +
-        '<div class="card"><p>Your answer for ' + niceDate(opDate) + ': ' + badge + '</p>' + machineText + '</div>' +
-        '<h2>My own shift (Shift ' + me.home_shift + ')</h2>' +
-        (reason
-          ? '<div class="msg info">' + reason + ' on ' + niceDate(opDate) + '. You are not counted for duty on this date.</div>'
-          : '<div class="btn-row"><button class="btn good' + (attendance === 'Present' ? ' on' : '') + '" data-act="present">I will be PRESENT</button>' +
-            '<button class="btn bad' + (attendance === 'Absent' ? ' on' : '') + '" data-act="absent">I will be ABSENT</button></div>') +
-        '<h2>Overtime in another shift</h2>' +
-        '<p class="muted">Want extra duty? Choose a shift that is not yours. Your answer for this date is replaced.</p>' +
+        '<div class="card"><p>' + niceDate(opDate) + ': ' + statusText + '</p>' + machineText +
+        '<p class="muted">Attendance and overtime calls are set by the Mine Manager.</p></div>' +
+        '<h2>Overtime interest</h2>' +
+        '<p class="muted">Want extra duty on this date? Tell the Mine Manager which shift. The Mine Manager decides.</p>' +
+        (interest ? '<div class="msg info">Your interest for Shift ' + interest + ' on ' + niceDate(opDate) + ' is noted.</div>' : '') +
         '<label for="ot-shift">Shift</label><select id="ot-shift">' + others.map(function (s) {
-          return '<option value="' + s + '"' + (mine && mine.duty_shift === s ? ' selected' : '') + '>Shift ' + s + ' (' + SHIFT_TIMES[s] + ')</option>'; }).join('') + '</select>' +
-        (reason === 'Leave'
-          ? '<div class="msg info">You marked leave on this date, so overtime is not possible.</div>'
-          : '<button class="btn warn' + (attendance === 'Overtime' ? ' on' : '') + '" data-act="overtime">I am interested in overtime</button>') +
-        (attendance === 'Overtime' ? '<button class="btn secondary" data-act="clear">Withdraw my overtime interest</button>' : '') +
+          return '<option value="' + s + '"' + (interest === s ? ' selected' : '') + '>Shift ' + s + ' (' + SHIFT_TIMES[s] + ')</option>'; }).join('') + '</select>' +
+        (reason === 'Leave' || reason === 'Absent'
+          ? '<div class="msg info">You are on leave or marked absent on this date, so overtime is not possible.</div>'
+          : '<button class="btn warn' + (interest ? ' on' : '') + '" data-act="overtime">I am interested in overtime</button>') +
+        (interest ? '<button class="btn secondary" data-act="clear">Withdraw my overtime interest</button>' : '') +
         leaveSection(me);
     }
 
@@ -235,38 +230,70 @@
       return { attendance: att, duty_date: date, duty_shift: shift, status: att === 'Overtime' ? 'In progress' : 'Resolved' };
     }
 
-    // ---------- Shift Incharge ----------
+    // ---------- Mine Manager ----------
     var inDate = null, inShift = null;
+    function opTile(o, kind, extra) {
+      return '<div class="tcard ' + kind + '" data-id="' + esc(o.id) + '"><div class="head">' + avatar(o.skill_group) +
+        '<div><h3>' + esc(o.name) + '</h3><span class="muted">' + skillText(o.skill_group) + ' &middot; eff. ' + Math.round(effOf(o) * 100) + '%' +
+        (o.home_shift !== inShift ? ' &middot; Shift ' + o.home_shift : '') + '</span></div></div>' + extra + '</div>';
+    }
     function renderIncharge() {
-      document.getElementById('page-title').textContent = 'Shift Incharge: attendance help';
-      var info = currentShiftInfo();
-      if (!inDate) { inDate = info.date; inShift = info.shift; }
-      var ops = records.filter(function (r) { return r.record_type === 'OPERATOR' && r.home_shift === inShift; })
-        .sort(function (a, b) { return a.name.localeCompare(b.name); });
-      var html = '<p class="muted">Use this if an operator phones in. You can mark their attendance for them. Overtime is raised by the operator.</p>' +
-        '<label for="in-date">Date</label><input type="date" id="in-date" value="' + inDate + '">' +
+      document.getElementById('page-title').textContent = 'Mine Manager: operators';
+      if (!inDate) { var info = currentShiftInfo(); inDate = info.date; inShift = info.shift; }
+      var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
+      var alloc = computeAllocation(records, inDate, inShift);
+      var mine = ops.filter(function (o) { return o.home_shift === inShift; }).sort(function (a, b) { return effOf(b) - effOf(a) || a.name.localeCompare(b.name); });
+
+      // Which machines have no operator? Suggest overtime for those types.
+      var need = {};
+      alloc.idleHemms.forEach(function (h) { need[h.skill_group] = (need[h.skill_group] || 0) + 1; });
+      var needText = Object.keys(need).map(function (g) { return need[g] + ' ' + g.toLowerCase() + ' operator(s)'; }).join(', ');
+
+      var html = '<p class="muted">Change attendance and call operators for overtime, for any date. Every change updates the production projection.</p>' +
+        '<div class="field-grid"><div><label for="in-date">Date</label><input type="date" id="in-date" value="' + inDate + '"></div></div>' +
         '<div class="seg">' + SHIFTS.map(function (s) {
           return '<button class="' + (s === inShift ? 'on' : '') + '" data-act="shift" data-val="' + s + '">Shift ' + s + '<small>' + SHIFT_TIMES[s] + '</small></button>'; }).join('') + '</div>' +
-        '<a class="btn secondary" href="dashboard.html">' + icon('dashboard') + ' Open the dashboard</a>' +
-        '<h2>Shift ' + inShift + ' operators</h2><div class="grid wide">';
-      ops.forEach(function (o) {
-        var att = o.duty_date === inDate ? o.attendance : 'Not marked';
+        '<div class="card"><b>Shift ' + inShift + ', ' + niceDate(inDate) + ':</b> ' + alloc.assignments.length + ' machines running, planned ' + formatNum(alloc.plannedM3) + ' m³.' +
+        (needText ? ' <span class="badge warn wrap">Empty machines need ' + esc(needText) + '</span>' : ' <span class="badge good">Every OK machine has an operator</span>') +
+        ' <a href="dashboard.html">Open the dashboard</a></div>' +
+        '<h2>Shift ' + inShift + ' operators</h2><div class="grid">';
+      mine.forEach(function (o) {
         var why = leaveReason(o, inDate);
-        var upcoming = (o.leave_dates || []).filter(function (x) { return x >= dateToStr(new Date()); }).length;
-        html += '<div class="tcard ' + (why ? 'warn' : att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : 'info') + '" data-id="' + esc(o.id) + '">' +
-          '<div class="head">' + avatar(o.skill_group) + '<div><h3>' + esc(o.name) + '</h3><span class="muted">' + esc(o.skill_group) + ' &middot; efficiency ' + Math.round(effOf(o) * 100) + '%</span></div></div>' +
-          '<div>' + (why ? '<span class="badge warn">' + why + '</span>'
-                          : '<span class="badge ' + (att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : att === 'Overtime' ? 'info' : 'none') + '">' + att + '</span>') +
-          ' <span class="badge none">' + upcoming + ' leave days ahead</span></div>' +
-          (why ? '' : '<div class="btn-row"><button class="btn good' + (att === 'Present' ? ' on' : '') + '" data-act="present">Present</button>' +
-                      '<button class="btn bad' + (att === 'Absent' ? ' on' : '') + '" data-act="absent">Absent</button></div>') + '</div>';
+        var kind = why ? 'warn' : 'good';
+        var badge = why ? '<span class="badge warn">' + why + '</span>' : '<span class="badge good">On duty</span>';
+        var button = why === 'Absent' ? '<button class="btn good tiny" data-act="present">Mark present</button>'
+                   : why ? '' : '<button class="btn bad tiny" data-act="absent">Mark absent</button>';
+        html += opTile(o, kind, '<div class="chips">' + badge + '</div><div class="foot">' + button + '</div>');
       });
       html += '</div>';
-      var ot = records.filter(function (r) { return r.record_type === 'OPERATOR' && r.attendance === 'Overtime' && r.duty_date === inDate && r.duty_shift === inShift; });
-      html += '<h2>Overtime interest for Shift ' + inShift + '</h2><div class="card">' + (ot.length ? ot.map(function (o) {
-        return '<div class="row"><div class="grow"><b>' + esc(o.name) + '</b><br><span class="muted">' + esc(o.skill_group) + ', home Shift ' + o.home_shift + '</span></div><span class="badge info">Overtime</span></div>';
-      }).join('') : '<p class="muted">Nobody has raised interest yet.</p>') + '</div>';
+
+      // Overtime calls: operators of other shifts who are free on that date
+      var pool = ops.filter(function (o) { return o.home_shift !== inShift && !overtimeBlocked(o, inDate); })
+        .sort(function (a, b) {
+          var ia = (a.attendance === 'Overtime' && a.duty_date === inDate && a.duty_shift === inShift) ? 0 : 1;
+          var ib = (b.attendance === 'Overtime' && b.duty_date === inDate && b.duty_shift === inShift) ? 0 : 1;
+          var na = need[a.skill_group] ? 0 : 1, nb = need[b.skill_group] ? 0 : 1;
+          return ia - ib || na - nb || effOf(b) - effOf(a) || a.name.localeCompare(b.name);
+        });
+      html += '<h2>Overtime call for Shift ' + inShift + ' (costs extra)</h2>' +
+        '<p class="muted">Overtime operators get a machine only if a machine would otherwise stay empty. "Interested" means the operator asked for overtime.</p><div class="grid">';
+      pool.forEach(function (o) {
+        var callShift = overtimeCallShift(o, inDate);
+        var interested = o.attendance === 'Overtime' && o.duty_date === inDate && o.duty_shift === inShift;
+        var chips = (interested ? '<span class="badge info">Interested</span>' : '') +
+                    (callShift === inShift ? '<span class="badge good">Called</span>' : callShift ? '<span class="badge none">Called for Shift ' + callShift + '</span>' : '') +
+                    (need[o.skill_group] ? '<span class="badge warn">Needed</span>' : '');
+        var button = callShift === inShift ? '<button class="btn secondary tiny" data-act="uncall">Cancel call</button>'
+                   : callShift ? '' : '<button class="btn warn tiny" data-act="call">Call</button>';
+        html += opTile(o, callShift === inShift ? 'good' : interested ? 'info' : '', '<div class="chips">' + chips + '</div><div class="foot">' + button + '</div>');
+      });
+      html += '</div>';
       document.getElementById('content').innerHTML = html;
+    }
+    function withDate(list, d, add) {
+      var out = (list || []).filter(function (x) { return x !== d; });
+      if (add) out.push(d);
+      return out.sort();
     }
 
     // ---------- One click handler for the whole page ----------
@@ -287,8 +314,6 @@
       } else if (role === 'operator') {
         var me = byId(getOperatorId());
         if (!me) return;
-        if (act === 'present') save(me.id, opFields('Present', me.home_shift, opDate), 'Saved: you will be PRESENT on ' + niceDate(opDate) + '.');
-        if (act === 'absent') save(me.id, opFields('Absent', me.home_shift, opDate), 'Saved: you will be ABSENT on ' + niceDate(opDate) + '.');
         if (act === 'overtime') save(me.id, opFields('Overtime', document.getElementById('ot-shift').value, opDate), 'Saved: your overtime interest is noted.');
         if (act === 'clear') save(me.id, { attendance: 'Not marked', duty_date: null, duty_shift: null, status: 'Open' }, 'Your overtime interest is withdrawn.');
         if (act === 'calprev' || act === 'calnext') {
@@ -311,17 +336,20 @@
           save(me.id, { leave_dates: list }, 'Leave saved. You have ' + list.length + ' leave day(s) marked ahead.');
         }
       } else if (role === 'incharge') {
-        if (act === 'shift') { inShift = btn.getAttribute('data-val'); renderIncharge(); }
-        else if (card) {
-          var op = byId(card.getAttribute('data-id'));
-          save(op.id, opFields(act === 'present' ? 'Present' : 'Absent', op.home_shift, inDate), 'Attendance saved for ' + op.name + '.');
-        }
+        if (act === 'shift') { inShift = btn.getAttribute('data-val'); renderIncharge(); return; }
+        var op = card ? byId(card.getAttribute('data-id')) : null;
+        if (!op) return;
+        if (act === 'absent') save(op.id, { absent_dates: withDate(op.absent_dates, inDate, true) }, op.name + ' marked absent on ' + niceDate(inDate) + '.');
+        if (act === 'present') save(op.id, { absent_dates: withDate(op.absent_dates, inDate, false) }, op.name + ' marked present on ' + niceDate(inDate) + '.');
+        if (act === 'call') { var calls = Object.assign({}, op.ot_calls || {}); calls[inDate] = inShift; save(op.id, { ot_calls: calls }, op.name + ' called for overtime in Shift ' + inShift + ' on ' + niceDate(inDate) + '.'); }
+        if (act === 'uncall') { var calls2 = Object.assign({}, op.ot_calls || {}); delete calls2[inDate]; save(op.id, { ot_calls: calls2 }, 'Overtime call cancelled for ' + op.name + '.'); }
       }
     });
     document.getElementById('content').addEventListener('change', function (e) {
       if (e.target.id === 'op-date') { opDate = e.target.value || opDate; renderOperator(); }
       if (e.target.id === 'in-date') { inDate = e.target.value || inDate; renderIncharge(); }
     });
+    window.onThemeChange = function () {};
 
     refresh();
   </script>

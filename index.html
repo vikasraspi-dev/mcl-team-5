@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b57d0">
+  <meta name="theme-color" content="#4d5b6e">
   <title>HEMM Shift Allocator</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -22,9 +22,9 @@
 
     <h2>Choose your role</h2>
     <div class="grid wide">
-      <button class="btn role-btn" id="role-incharge"><span id="ic1"></span><span>Shift Incharge<small>See who drives what. Help with attendance.</small></span></button>
+      <button class="btn role-btn" id="role-incharge"><span id="ic1"></span><span>Mine Manager<small>Manage operators: attendance and overtime calls, for any date.</small></span></button>
       <button class="btn role-btn" id="role-engineer"><span id="ic2"></span><span>Maintenance Engineer<small>Mark which HEMMs are OK and when.</small></span></button>
-      <button class="btn role-btn" id="role-operator"><span id="ic3"></span><span>Operator<small>Mark present or absent. Plan leave. Ask for overtime.</small></span></button>
+      <button class="btn role-btn" id="role-operator"><span id="ic3"></span><span>Operator<small>See your duty and machine. Apply for leave. Show overtime interest.</small></span></button>
     </div>
 
     <div id="operator-pick" class="card hidden">
@@ -36,8 +36,8 @@
     <div class="card tonal">
       <h3>How it works</h3>
       <p class="muted">1. The engineer marks each machine OK, under repair or broken down, with the time it will be OK.</p>
-      <p class="muted">2. Operators mark Present or Absent and plan their leave on a calendar.</p>
-      <p class="muted">3. The tool matches the most efficient operators with the most reliable machines and shows the result on the Dashboard.</p>
+      <p class="muted">2. The Mine Manager manages attendance and overtime calls. Operators apply for leave on a calendar.</p>
+      <p class="muted">3. The tool matches the most efficient operators with the most reliable machines. The Dashboard shows the monthly projection and the allotment for any day.</p>
     </div>
     <p class="muted">There is no password in this tool. Anyone with the link can choose any role. All data here is made up.</p>
   </main>

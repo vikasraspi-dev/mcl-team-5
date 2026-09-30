@@ -1,6 +1,16 @@
 /* app.js - shared code for every page: database link, header, allocation rules.
    Load order on each page: supabase-js, config.js, then this file. */
 
+// ---- Light / dark theme (remembered on this phone) ----
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('hemm_theme'); } catch (e) { /* ignore */ }
+  if (t !== 'light' && t !== 'dark') {
+    t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  document.documentElement.setAttribute('data-theme', t);
+})();
+
 // ---- Database link (the variable is called "db", not "supabase") ----
 var db = null;
 var dbSetupError = null;
@@ -13,7 +23,7 @@ try {
 var TABLE = 'dispatch_records';
 var SHIFTS = ['A', 'B', 'C'];
 var SHIFT_TIMES = { A: '6 AM - 2 PM', B: '2 PM - 10 PM', C: '10 PM - 6 AM' };
-var ROLE_NAMES = { incharge: 'Shift Incharge', engineer: 'Maintenance Engineer', operator: 'Operator' };
+var ROLE_NAMES = { incharge: 'Mine Manager', engineer: 'Maintenance Engineer', operator: 'Operator' };
 var LOCATIONS = ['Parking yard', 'Workshop', 'Pit', 'Haul road', 'Dump yard'];
 // "About how long until the machine is OK?" choices for the engineer (hours).
 var ETA_HOURS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72];
@@ -34,6 +44,8 @@ function esc(text) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
   });
 }
+// Skill name that may wrap after the slash, for small tiles.
+function skillText(g) { return esc(g).replace('/', '/<wbr>'); }
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
 function dateToStr(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 
@@ -92,6 +104,8 @@ var ICONS = {
   chart: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z',
   event: 'M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2zm-8 4H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z',
   check: 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
+  sun: 'M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM11 1h2v3h-2zM11 20h2v3h-2zM1 11h3v2H1zM20 11h3v2h-3zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4zM16.3 17.7l1.4-1.4 2.1 2.1-1.4 1.4zM17.7 4.2l1.4 1.4-2.1 2.1-1.4-1.4zM5.6 19.8l-1.4-1.4 2.1-2.1 1.4 1.4z',
+  moon: 'M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26 5.4 5.4 0 0 1-5.4-5.4c0-1.81.89-3.42 2.26-4.4A9.2 9.2 0 0 0 12 3z',
   truck: 'M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z'
 };
 function icon(name, small) {
@@ -106,6 +120,16 @@ function avatar(kind) {
 }
 
 // ---- App bar and navigation, the same on every page ----
+// The Mahanadi Coalfields logo: put the official logo file in the top folder and name it logo.png.
+// Until that file exists, a plain "MCL" badge is shown instead.
+function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'light'; }
+function setTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  store('hemm_theme', t);
+  var btn = document.getElementById('theme-toggle');
+  if (btn) btn.innerHTML = icon(t === 'dark' ? 'sun' : 'moon');
+  if (typeof window.onThemeChange === 'function') window.onThemeChange();
+}
 function renderHeader(activePage) {
   var el = document.getElementById('site-header');
   if (!el) return;
@@ -117,10 +141,14 @@ function renderHeader(activePage) {
   }).join('');
   el.className = 'site-header';
   el.innerHTML =
-    '<div class="appbar-top"><div class="brand"><span class="logo">' + icon('truck') + '</span>' +
-    '<div><div class="title">HEMM Shift Allocator</div><div class="subtitle">MCL Team 5</div></div></div>' +
-    '<a class="role-chip" href="index.html">' + icon('person') + esc(who) + '</a></div>' +
+    '<div class="appbar-top"><div class="brand"><span class="logo"><img src="logo.png" alt="Mahanadi Coalfields Limited"></span>' +
+    '<div><div class="title">HEMM Allocator</div><div class="subtitle">Mahanadi Coalfields Limited &middot; Team 5</div></div></div>' +
+    '<a class="role-chip" href="index.html">' + icon('person') + esc(who) + '</a>' +
+    '<button class="icon-btn" id="theme-toggle" aria-label="Switch dark or light theme">' + icon(currentTheme() === 'dark' ? 'sun' : 'moon') + '</button></div>' +
     '<nav class="nav">' + nav + '</nav>';
+  var img = el.querySelector('.logo img');
+  img.onerror = function () { img.parentNode.innerHTML = '<span class="logo-fallback">MCL</span>'; };
+  document.getElementById('theme-toggle').onclick = function () { setTheme(currentTheme() === 'dark' ? 'light' : 'dark'); };
 }
 
 // ---- Friendly messages (errors always show the real error text) ----
@@ -200,11 +228,28 @@ function addDays(dateStr, n) {
   var p = dateStr.split('-');
   return dateToStr(new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10) + n));
 }
-// Why is this operator not on duty on this date? 'Weekly off', 'Leave' or null.
+// Why is this operator not on duty on this date?
+// 'Weekly off', 'Leave' (applied by the operator), 'Absent' (marked by the Mine Manager) or null.
+// Everyone is treated as present unless one of these applies.
 function leaveReason(o, dateStr) {
   if (o.weekly_off != null && weekdayOf(dateStr) === Number(o.weekly_off)) return 'Weekly off';
   if ((o.leave_dates || []).indexOf(dateStr) >= 0) return 'Leave';
+  if ((o.absent_dates || []).indexOf(dateStr) >= 0) return 'Absent';
   return null;
+}
+// Overtime call made in advance by the Mine Manager: { "2026-10-05": "B" } means "call for Shift B on that date".
+function overtimeCallShift(o, dateStr) {
+  return (o.ot_calls && o.ot_calls[dateStr]) || null;
+}
+// An operator on applied leave or marked absent cannot be called for overtime (weekly off can).
+function overtimeBlocked(o, dateStr) {
+  return (o.leave_dates || []).indexOf(dateStr) >= 0 || (o.absent_dates || []).indexOf(dateStr) >= 0;
+}
+// Overtime operators for a date and shift: called by the manager, from another shift, and free that day.
+function overtimeCalled(ops, dateStr, shift) {
+  return ops.filter(function (o) {
+    return o.home_shift !== shift && overtimeCallShift(o, dateStr) === shift && !overtimeBlocked(o, dateStr);
+  });
 }
 // Operator efficiency as a fraction (0.92 = 92% of the standard trips per shift).
 function effOf(o) {
@@ -220,8 +265,8 @@ function breakdownProbOf(h) {
 //   1. Machines marked OK (fit).
 //   2. Machines under repair whose "expected OK" time is on or before the shift start.
 // Operators who can be given a machine:
-//   1. Own-shift operators who marked "Present" for that date.
-//   2. Overtime operators, ONLY for machines left empty because there are fewer regular operators.
+//   1. Own-shift operators who are not on weekly off, leave or marked absent (present by default).
+//   2. Overtime operators called by the Mine Manager, ONLY for machines left empty because there are fewer regular operators.
 function computeAllocation(records, dateStr, shift) {
   var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
   var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
@@ -232,12 +277,9 @@ function computeAllocation(records, dateStr, shift) {
   var etaOf = function (h) { return h.expected_ok_at ? new Date(h.expected_ok_at) : null; };
 
   var regular = ops.filter(function (o) {
-    return o.home_shift === shift && o.attendance === 'Present' && o.duty_date === dateStr && !leaveReason(o, dateStr);
+    return o.home_shift === shift && !leaveReason(o, dateStr);
   }).sort(byName);
-  var overtimeAll = ops.filter(function (o) {
-    return o.home_shift !== shift && o.attendance === 'Overtime' && o.duty_shift === shift && o.duty_date === dateStr &&
-           (o.leave_dates || []).indexOf(dateStr) < 0;
-  }).sort(byName);
+  var overtimeAll = overtimeCalled(ops, dateStr, shift).sort(byName);
   var overtimeNotAllotted = [];
   var overtimeUsed = 0;
 
@@ -362,15 +404,24 @@ function chanceAtLeastOne(ps) {
 }
 // Expected overburden (m3) in one shift, when the best operators are given the machines that are running.
 // Dumpers haul only when an excavator is loading; the excavator operator's efficiency scales the loading.
-function shiftProduction(exOps, exMachines, duOps, duMachines) {
+// Regular operators come first. Called overtime operators (efficiencies otDu / otEx, best first) fill only empty machines.
+function shiftProduction(exOps, exOt, exMachines, duOps, duOt, duMachines) {
   var machineCount = countChances(duMachines), dumperSum = 0;
+  var otPrefix = [0];
+  duOt.forEach(function (e, k) { otPrefix.push(otPrefix[k] + e); });
   attendanceCases(duOps).forEach(function (c) {
     var prefix = [0];
     c.effs.forEach(function (e, k) { prefix.push(prefix[k] + e); });
-    machineCount.forEach(function (pm, m) { dumperSum += c.prob * pm * prefix[Math.min(m, c.effs.length)]; });
+    machineCount.forEach(function (pm, m) {
+      var extra = Math.min(Math.max(0, m - c.effs.length), duOt.length);
+      dumperSum += c.prob * pm * (prefix[Math.min(m, c.effs.length)] + otPrefix[extra]);
+    });
   });
   var loading = 0;
-  attendanceCases(exOps).forEach(function (c) { if (c.effs.length) loading += c.prob * c.effs[0]; });
+  attendanceCases(exOps).forEach(function (c) {
+    if (c.effs.length) loading += c.prob * c.effs[0];
+    else if (exOt.length) loading += c.prob * exOt[0];
+  });
   loading *= chanceAtLeastOne(exMachines);
   return dumperSum * loading * m3PerDumperShift();
 }
@@ -391,7 +442,7 @@ function projectProduction(records, startDateStr, days) {
     var marked = 0, working = 0;
     dayList.forEach(function (d) {
       var r = leaveReason(o, d);
-      if (r === 'Leave') marked++; else if (!r) working++;
+      if (r === 'Leave' || r === 'Absent') marked++; else if (!r) working++;
     });
     var left = Math.max(0, EXTRA_LEAVE_DAYS * days / 30 - marked);
     extraP[o.id] = Math.min(1, left / Math.max(1, working));
@@ -413,13 +464,16 @@ function projectProduction(records, startDateStr, days) {
       var st = shiftWindow(d, s).start.getTime();
       var exOps = ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Excavator'; });
       var duOps = ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Dumper'; });
+      var effsOf = function (list) { return list.map(effOf).sort(function (a, b) { return b - a; }); };
+      var otEx = effsOf(overtimeCalled(ops, d, s).filter(function (o) { return o.skill_group === 'Excavator'; }));
+      var otDu = effsOf(overtimeCalled(ops, d, s).filter(function (o) { return o.skill_group === 'Dumper'; }));
       var expected = shiftProduction(
-        exOps.map(function (o) { return { p: opChance(o, d), eff: effOf(o) }; }),
+        exOps.map(function (o) { return { p: opChance(o, d), eff: effOf(o) }; }), otEx,
         exMachines.map(function (h) { return machineChance(h, st); }),
-        duOps.map(function (o) { return { p: opChance(o, d), eff: effOf(o) }; }),
+        duOps.map(function (o) { return { p: opChance(o, d), eff: effOf(o) }; }), otDu,
         duMachines.map(function (h) { return machineChance(h, st); }));
-      var full = shiftProduction(exOps.map(function (o) { return { p: 1, eff: effOf(o) }; }), exMachines.map(function () { return 1; }),
-        duOps.map(function (o) { return { p: 1, eff: effOf(o) }; }), duMachines.map(function () { return 1; }));
+      var full = shiftProduction(exOps.map(function (o) { return { p: 1, eff: effOf(o) }; }), [], exMachines.map(function () { return 1; }),
+        duOps.map(function (o) { return { p: 1, eff: effOf(o) }; }), [], duMachines.map(function () { return 1; }));
       fullTotal += full;
       return expected;
     });
@@ -428,4 +482,19 @@ function projectProduction(records, startDateStr, days) {
     return { date: d, total: dayTotal, shifts: perShift };
   });
   return { days: result, total: total, fullTotal: fullTotal, average: total / days };
+}
+
+// ---- Telling people how a change moved the projection ----
+function projectedTotal(records) {
+  return projectProduction(records, currentShiftInfo().date, PROJECTION_DAYS).total;
+}
+// Returns { text, kind } where kind is 'ok' (increase), 'warn' (decrease) or 'info' (no change).
+function changeMessage(before, after) {
+  var diff = after - before;
+  if (Math.abs(diff) < 1) return { text: 'Projected production (next ' + PROJECTION_DAYS + ' days) is unchanged at ' + formatNum(after) + ' m³.', kind: 'info' };
+  return {
+    text: 'Projected production (next ' + PROJECTION_DAYS + ' days) ' + (diff > 0 ? 'INCREASED' : 'DECREASED') + ' by ' + formatNum(Math.abs(diff)) +
+          ' m³ (' + (diff > 0 ? '+' : '-') + (before ? (Math.abs(diff) / before * 100).toFixed(1) : '0') + '%): from ' + formatNum(before) + ' to ' + formatNum(after) + ' m³.',
+    kind: diff > 0 ? 'ok' : 'warn'
+  };
 }
