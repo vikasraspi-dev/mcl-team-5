@@ -47,6 +47,13 @@
       </details>
     </section>
 
+    <section id="maint-wrap" style="margin-top:12px">
+      <div class="card-head"><h2 style="margin:0">Planned maintenance <span class="badge info" id="maint-count"></span></h2></div>
+      <p class="muted">Future maintenance planned by the Maintenance Engineer. Each card shows what it costs in production and whether it is better to prepone or postpone it, using leave, spare machines and the extra risk of a late service.</p>
+      <div class="card"><h3 class="ct">Timeline: next 30 days</h3><div id="maint-timeline"></div></div>
+      <div class="dgrid" id="maint-cards" style="margin-top:12px"></div>
+    </section>
+
     <div class="kpis" id="kpis" style="margin-top:12px">
       <div class="kpi k1 skel"></div><div class="kpi k2 skel"></div><div class="kpi k3 skel"></div><div class="kpi k4 skel"></div><div class="kpi k5 skel"></div>
     </div>
@@ -456,14 +463,83 @@
     document.getElementById('sim-hemm').onchange = function () { sim.hemmId = this.value; drawDecisions(); };
     document.getElementById('sim-op').onchange = function () { sim.opId = this.value; drawDecisions(); };
     document.getElementById('sim-clear').onclick = function () { sim.hemmId = ''; sim.opId = ''; drawDecisions(); };
-    document.getElementById('decisions').addEventListener('click', function (e) {
+    ['decisions', 'maint-cards'].forEach(function (id) { document.getElementById(id).addEventListener('click', function (e) {
       var b = e.target.closest('button[data-copy]');
       if (!b) return;
       var text = copyTexts[parseInt(b.getAttribute('data-copy'), 10)] || '';
       var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy request'; }, 1600); };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { window.prompt('Copy this request:', text); });
       else window.prompt('Copy this request:', text);
-    });
+    }); });
+
+
+    function maintChip(h) {
+      var w = maintWindow(h);
+      if (!w || w.end <= Date.now()) return '';
+      if (w.start <= Date.now()) return '<span class="badge bad">In maintenance</span>';
+      if (w.start > Date.now() + PROJECTION_DAYS * 86400000) return '';
+      return '<span class="badge warn">Maint. ' + esc(niceTime(w.start)) + ' &middot; ' + w.hours + ' h</span>';
+    }
+
+    // ---------- Planned maintenance: timeline and advice cards ----------
+    function drawMaintenance() {
+      var planned = records.filter(function (r) { return r.record_type === 'HEMM' && r.maint_start; })
+        .map(function (h) { return maintenanceAdvice(records, h); })
+        .filter(function (a) { return a && a.status !== 'done'; })
+        .sort(function (a, b) { return (b.sched ? b.sched.loss : 0) - (a.sched ? a.sched.loss : 0); });
+      document.getElementById('maint-count').textContent = planned.length ? planned.length + (planned.length === 1 ? ' job' : ' jobs') : 'none planned';
+      if (!planned.length) {
+        document.getElementById('maint-timeline').innerHTML = '<p class="muted">No maintenance is planned. The Maintenance Engineer can plan it on the My Work page.</p>';
+        document.getElementById('maint-cards').innerHTML = '';
+        return;
+      }
+      // Timeline: 30 days from midnight today
+      var DAY = 86400000, t0 = new Date(); t0.setHours(0, 0, 0, 0); t0 = t0.getTime();
+      var span = PROJECTION_DAYS * DAY;
+      var pos = function (ms) { return Math.max(0, Math.min(100, (ms - t0) / span * 100)); };
+      var ticks = '';
+      for (var d = 0; d < PROJECTION_DAYS; d += (window.innerWidth < 600 ? 10 : 5)) ticks += '<span style="left:' + (d / PROJECTION_DAYS * 100) + '%">' + niceDate(addDays(todayStr, d)).replace(/ \d{4}$/, '') + '</span>';
+      var rows = planned.map(function (a) {
+        var left = pos(a.w.start), width = Math.max(1.2, (a.w.end - a.w.start) / span * 100);
+        var ghost = '';
+        if (a.verdict && a.verdict !== 'keep') {
+          ghost = '<div class="tl-ghost" title="Suggested: ' + esc(niceTime(a.best.start)) + '" style="left:' + pos(a.best.start) + '%;width:' + width + '%"></div>';
+        }
+        return '<div class="tl-row"><div class="tl-name" title="' + esc(a.h.name) + '">' + esc(a.h.name) + '</div><div class="tl-track">' +
+          '<div class="tl-today" style="left:' + pos(Date.now()) + '%"></div>' + ghost +
+          '<div class="tl-bar' + (a.status === 'ongoing' ? ' now' : '') + '" title="' + esc(a.h.name + ': ' + niceTime(a.w.start) + ' for ' + a.w.hours + ' h') + '" style="left:' + left + '%;width:' + width + '%"></div></div></div>';
+      }).join('');
+      document.getElementById('maint-timeline').innerHTML = '<div class="tl-axis"><div></div><div class="tl-ticks">' + ticks + '</div></div>' + rows +
+        '<div class="tl-key"><span><i style="background:#F7882F"></i>Planned</span><span><i style="border:2px dashed var(--good)"></i>Suggested slot</span><span><i style="background:var(--ink);opacity:.5;width:3px"></i>Now</span></div>';
+
+      // Advice cards
+      copyTexts = copyTexts || [];
+      document.getElementById('maint-cards').innerHTML = planned.map(function (a) {
+        var h = a.h, w = a.w;
+        var sub = niceTime(w.start) + ' to ' + niceTime(w.end) + ' &middot; ' + w.hours + ' h' + (w.due !== null ? ' &middot; latest safe start ' + niceTime(w.due) : '');
+        if (a.status === 'ongoing') {
+          return cardShell('low', avatar(h.hemm_type), 'In maintenance now: ' + h.name, esc(h.maint_task || 'Maintenance') + ' &middot; ' + sub, false,
+            '<div class="dloss">' + maintVerdictText(a) + ' The allotment already leaves this machine out.</div>');
+        }
+        var sev = sevOf(a.sched.loss, a.sched.base);
+        var moved = a.verdict !== 'keep';
+        var body = '<div class="dloss">' + (a.sched.loss < 1
+          ? '<b>Doing it as planned costs no production.</b> Spare machines cover it.'
+          : 'Doing it as planned costs about <b>' + formatNum(a.sched.loss) + ' m³</b> (' + (a.sched.base ? (a.sched.loss / a.sched.base * 100).toFixed(1) : '0') + '% of production in those days).') + '</div>' +
+          '<div class="best"><b>Suggestion:</b> ' + maintSuggestion(a) + '</div>' +
+          (a.clash.length ? '<div class="dloss"><b>Clash:</b> ' + esc(a.clash.join(', ')) + ' is also out at the same time, so production drops sharply. Move only one of them.</div>' : '') +
+          '<div class="dopt"><h4>Cost of each start time</h4><div class="chips2">' +
+          a.options.map(function (o) {
+            var isBest = o.start === a.best.start && moved;
+            return '<div class="opt cost' + (isBest ? ' rec' : '') + '"><b>' + esc(o.label) + '</b>' + (o.loss < 1 ? 'no loss' : '-' + formatNum(o.loss) + ' m³') +
+              '<br><span class="muted">' + esc(niceTime(o.start, true)) + (o.overdueDays > 0.05 ? ' &middot; late ' + o.overdueDays.toFixed(1) + ' d' : '') + '</span></div>';
+          }).join('') + '</div></div>' +
+          ((a.sched.loss >= 1 || moved) ? '<div class="muted">Operators on duty per shift (excavator / dumper): in the planned window <b>' + a.crewSched.ex.toFixed(1) + ' / ' + a.crewSched.du.toFixed(1) +
+            '</b>' + (moved ? ', in the suggested window <b>' + a.crewBest.ex.toFixed(1) + ' / ' + a.crewBest.du.toFixed(1) + '</b>' : '') + '.</div>' : '') +
+          (moved ? copyBtn('Request to Maintenance Engineer: please ' + a.verdict + ' the ' + (h.maint_task || 'maintenance') + ' of ' + h.name + ' from ' + niceTime(w.start) + ' to ' + niceTime(a.best.start) + '. It saves about ' + formatNum(a.saving) + ' m3 of production.') : '');
+        return cardShell(sev, avatar(h.hemm_type), (moved ? (a.verdict === 'prepone' ? 'Prepone? ' : 'Postpone? ') : 'Keep: ') + h.name, esc(h.maint_task || 'Maintenance') + ' &middot; ' + sub, false, body);
+      }).join('');
+    }
 
     // ---------- What-if sliders ----------
     var SLIDERS = [
@@ -575,6 +651,7 @@
           '<dt>Repair urgency</dt><dd>' + esc(r.urgency) + '</dd>' +
           '<dt>Expected OK</dt><dd>' + (r.status === 'Resolved' ? 'Working' : (r.expected_ok_at ? niceTime(r.expected_ok_at) + ' (' + etaFromNow(r.expected_ok_at) + ')' : 'Not given')) + '</dd>' +
           '<dt>Remarks</dt><dd>' + esc(r.remarks || '-') + '</dd>' +
+          '<dt>Planned maintenance</dt><dd>' + (maintWindow(r) ? esc(r.maint_task || 'Maintenance') + ', ' + niceTime(r.maint_start) + ' for ' + maintWindow(r).hours + ' h' : 'None') + '</dd>' +
           '<dt>Driver, Shift ' + selShift + ' ' + niceDate(selDate).replace(/ \d{4}$/, '') + '</dt><dd>' + (d ? esc(d.operator.name) + ' (' + Math.round(d.eff * 100) + '%)' : 'No operator') + '</dd></dl>';
       } else {
         var why = leaveReason(r, selDate), called = overtimeCallShift(r, selDate);
@@ -624,6 +701,7 @@
         kpi('k5', 'person', Math.round(avgEff) + '%', 'Average efficiency', 'of the operators who have a machine', avgEff);
       drawInsights(curProj);
       drawDecisions();
+      drawMaintenance();
       drawCalendar();
 
       // ---- Allotment list ----
@@ -653,7 +731,7 @@
         return '<div class="tcard ' + hemmStatusClass(h) + '"><div class="head">' + avatar(h.hemm_type) +
           '<div><h3>' + esc(h.name) + '</h3><span class="muted">' + esc(h.make_model) + '</span></div></div>' +
           '<div class="chips"><span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span><span class="badge none">' + breakdownProbOf(h) + '% risk</span>' +
-          (eta ? '<span class="badge none">' + esc(eta) + '</span>' : '') + '</div>' +
+          (eta ? '<span class="badge none">' + esc(eta) + '</span>' : '') + maintChip(h) + '</div>' +
           '<div class="foot">' + (d ? '<span class="badge info">' + esc(d.operator.name) + '</span>' : '<span class="badge none">No operator</span>') + '</div></div>';
       }).join('');
 
@@ -704,6 +782,7 @@
       if (a.comingBack.length) att2 += '<h3>Machines expected back during this shift</h3>' + a.comingBack.map(function (h) {
         return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b></div><span class="badge warn">OK by ' + niceTime(h.expected_ok_at) + '</span></div>';
       }).join('');
+      if (a.inMaintenance.length) att2 += '<h3>In planned maintenance this shift</h3><p>' + a.inMaintenance.map(function (h) { return esc(h.name); }).join(', ') + '</p>';
       if (a.notFit.length) att2 += '<h3>Machines not fit now</h3>' + a.notFit.map(function (h) {
         return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b><br><span class="muted">' + esc(h.location) + ' &middot; urgency ' + esc(h.urgency) +
           (h.expected_ok_at ? ' &middot; expected OK ' + niceTime(h.expected_ok_at) + ' (' + etaFromNow(h.expected_ok_at) + ')' : ' &middot; expected OK time not given') +

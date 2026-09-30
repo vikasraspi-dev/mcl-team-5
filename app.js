@@ -65,12 +65,12 @@ function shiftWindow(dateStr, shift) {
   return { start: start, end: new Date(start.getTime() + 8 * 3600 * 1000) };
 }
 // e.g. "4:30 PM", or "1 Oct, 4:30 PM" when it is not today.
-function niceTime(iso) {
+function niceTime(iso, alwaysDate) {
   if (!iso) return '';
   var d = new Date(iso);
   var h = d.getHours(), m = d.getMinutes();
   var t = (h % 12 === 0 ? 12 : h % 12) + ':' + pad2(m) + ' ' + (h < 12 ? 'AM' : 'PM');
-  if (dateToStr(d) === dateToStr(new Date())) return t;
+  if (dateToStr(d) === dateToStr(new Date())) return alwaysDate ? 'Today, ' + t : t;
   return niceDate(dateToStr(d)).replace(/ \d{4}$/, '') + ', ' + t;
 }
 // e.g. "in about 3 h" or "time has passed"
@@ -329,7 +329,9 @@ var EXTRA_LEAVE_DAYS = 2;         // about 2 leave days a month, besides the wee
 var DEFAULT_BREAKDOWN_PROB = 5;   // % chance per shift, used when a machine has no value
 var DEFAULT_EFFICIENCY = 85;      // % used when an operator has no efficiency value
 var UNKNOWN_REPAIR_DAYS = 2;      // repair time assumed when the engineer gave none
-var PROJECTION_DAYS = 30;         // the projection looks 30 days ahead
+var PROJECTION_DAYS = 30;
+var RISK_PER_OVERDUE_DAY = 1.5;   // a service that is late adds this many % points to the breakdown chance for each late day
+var MAINT_TASKS = ['Routine service (250 h)', '500-hour service', 'Tyres and brakes', 'Major overhaul', 'Other work'];         // the projection looks 30 days ahead
 var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 var BREAKDOWN_CHOICES = [0, 1, 2, 3, 5, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50];
 
@@ -375,6 +377,31 @@ function breakdownProbOf(h) {
   return h.breakdown_prob == null ? DEFAULT_BREAKDOWN_PROB : Number(h.breakdown_prob);
 }
 
+
+// ---- Planned (future) maintenance of a machine, set by the Maintenance Engineer ----
+// maint_start = when it starts, maint_hours = how long, maint_due = the latest safe start (optional), maint_task = what work.
+function maintWindow(h) {
+  if (!h || !h.maint_start) return null;
+  var start = new Date(h.maint_start).getTime();
+  var hours = Number(h.maint_hours) > 0 ? Number(h.maint_hours) : 8;
+  var due = h.maint_due ? new Date(h.maint_due).getTime() : null;
+  return { start: start, end: start + hours * 3600000, hours: hours, due: due };
+}
+// What share (0 to 1) of the 8-hour shift starting at shiftStartMs is covered by the machine's planned maintenance?
+function maintOverlapFraction(h, shiftStartMs) {
+  var w = maintWindow(h);
+  if (!w) return 0;
+  var shiftMs = SHIFT_MINUTES * 60000;
+  var overlap = Math.min(w.end, shiftStartMs + shiftMs) - Math.max(w.start, shiftStartMs);
+  return overlap > 0 ? Math.min(1, overlap / shiftMs) : 0;
+}
+// Extra breakdown chance (% points) while a service is overdue (after its due time and before it is done).
+function overdueExtra(h, timeMs) {
+  var w = maintWindow(h);
+  if (!w || w.due === null || timeMs <= w.due || timeMs >= w.end) return 0;
+  return Math.min(50, RISK_PER_OVERDUE_DAY * (timeMs - w.due) / 86400000);
+}
+
 // ---- The automatic allocation ----
 // Input: all rows, the date (YYYY-MM-DD) and the shift (A/B/C).
 // Machines that can be given to operators in that shift:
@@ -400,9 +427,11 @@ function computeAllocation(records, dateStr, shift) {
   var overtimeUsed = 0;
 
   // Machines that can work in this shift, in the order they should get operators.
+  var shiftStartMs = win.start.getTime();
+  var inMaintenance = hemms.filter(function (h) { return maintOverlapFraction(h, shiftStartMs) >= 0.5; });
   var usable = hemms.filter(function (h) {
     var eta = etaOf(h);
-    return isFit(h) || (eta && eta <= win.start);
+    return (isFit(h) || (eta && eta <= win.start)) && inMaintenance.indexOf(h) < 0;
   }).sort(function (a, b) {
     return breakdownProbOf(a) - breakdownProbOf(b) ||
            String(a.serial_no).localeCompare(String(b.serial_no), undefined, { numeric: true });
@@ -430,9 +459,9 @@ function computeAllocation(records, dateStr, shift) {
     var regG = regular.filter(function (o) { return o.skill_group === group; });
     var otG = overtimeAll.filter(function (o) { return o.skill_group === group; });
     machines.forEach(function (h, i) {
-      if (regG[i]) assignments.push({ hemm: h, operator: regG[i], overtime: false, expected: !isFit(h), eff: effOf(regG[i]) });
+      if (regG[i]) assignments.push({ hemm: h, operator: regG[i], overtime: false, expected: !isFit(h), maintPart: maintOverlapFraction(h, shiftStartMs), eff: effOf(regG[i]) });
       else if (otG[i - regG.length]) {
-        assignments.push({ hemm: h, operator: otG[i - regG.length], overtime: true, expected: !isFit(h), eff: effOf(otG[i - regG.length]) });
+        assignments.push({ hemm: h, operator: otG[i - regG.length], overtime: true, expected: !isFit(h), maintPart: maintOverlapFraction(h, shiftStartMs), eff: effOf(otG[i - regG.length]) });
         overtimeUsed++;
       } else idleHemms.push(h);
     });
@@ -478,6 +507,7 @@ function computeAllocation(records, dateStr, shift) {
   return {
     plannedM3: plannedM3,
     expectedM3: expectedM3,
+    inMaintenance: inMaintenance,
     assignments: assignments,
     idleHemms: idleHemms,
     idleOperators: idleOperators,
@@ -569,7 +599,9 @@ function projectProduction(records, startDateStr, days) {
     if (h.status !== 'Resolved') {
       back = h.expected_ok_at ? new Date(h.expected_ok_at).getTime() : now + UNKNOWN_REPAIR_DAYS * 86400000;
     }
-    return startTime < back ? 0 : 1 - breakdownProbOf(h) / 100;
+    if (startTime < back) return 0;
+    var bp = Math.min(100, breakdownProbOf(h) + overdueExtra(h, startTime));
+    return (1 - bp / 100) * (1 - maintOverlapFraction(h, startTime));
   }
 
   var exMachines = hemms.filter(function (h) { return h.hemm_type === 'Excavator'; });
@@ -677,4 +709,132 @@ function withTripMinutes(minutes, fn) {
   var old = TRIP_MINUTES;
   TRIP_MINUTES = minutes;
   try { return fn(); } finally { TRIP_MINUTES = old; }
+}
+
+// ---- Advice: keep, prepone or postpone a planned maintenance? ----
+// For every possible start time we work out how much production is lost while the machine is away,
+// plus the extra breakdown risk if the service is late (RISK_PER_OVERDUE_DAY). The start time with the smallest loss wins.
+var adviceCache = {};
+function adviceKey(records) {
+  return currentShiftInfo().date + '|' + JSON.stringify(records.map(function (r) {
+    return [r.id, r.status, r.expected_ok_at, r.maint_start, r.maint_hours, r.maint_due, r.breakdown_prob, r.efficiency, r.leave_dates, r.absent_dates, r.ot_calls, r.weekly_off];
+  }));
+}
+// Production lost (m3) if machine h's maintenance starts at startMs, and the production without any maintenance over the same days.
+function maintEval(records, h, startMs) {
+  var w = maintWindow(h);
+  var hours = w.hours, DAY = 86400000;
+  var endMs = startMs + hours * 3600000;
+  var fromMs = Math.max(Date.now(), w.due !== null ? Math.min(startMs, w.due) : startMs);
+  var fromStr = dateToStr(new Date(fromMs));
+  var p = fromStr.split('-');
+  var fromDayMs = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10)).getTime();
+  var days = Math.max(1, Math.min(60, Math.ceil((endMs - fromDayMs) / DAY) + 1));
+  var withPlan = records.map(function (r) { return r === h ? Object.assign({}, r, { maint_start: new Date(startMs).toISOString() }) : r; });
+  var without = records.map(function (r) { return r === h ? Object.assign({}, r, { maint_start: null, maint_hours: null, maint_due: null }) : r; });
+  var base = projectProduction(without, fromStr, days).total;
+  var withT = projectProduction(withPlan, fromStr, days).total;
+  return { loss: Math.max(0, base - withT), base: base };
+}
+// Average number of excavator / dumper operators on duty per shift during a window.
+function crewDuring(records, startMs, hours) {
+  var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
+  var last = new Date(startMs + hours * 3600000), first = new Date(startMs);
+  var day = new Date(first.getFullYear(), first.getMonth(), first.getDate());
+  var ex = 0, du = 0, n = 0;
+  while (day <= last) {
+    var d = dateToStr(day);
+    SHIFTS.forEach(function (s) {
+      ex += ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Excavator' && !leaveReason(o, d); }).length;
+      du += ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Dumper' && !leaveReason(o, d); }).length;
+      n++;
+    });
+    day.setDate(day.getDate() + 1);
+  }
+  return { ex: n ? ex / n : 0, du: n ? du / n : 0 };
+}
+function maintenanceAdvice(records, h) {
+  var w = maintWindow(h);
+  if (!w) return null;
+  var stamp = adviceKey(records);
+  if (adviceCache._stamp !== stamp) adviceCache = { _stamp: stamp };   // the data changed: forget old advice
+  var key = h.id;
+  if (adviceCache[key]) return adviceCache[key];
+  var now = Date.now(), DAY = 86400000;
+  var result = { h: h, w: w, status: 'planned' };
+  if (w.end <= now) { result.status = 'done'; return (adviceCache[key] = result); }
+  if (w.start <= now) { result.status = 'ongoing'; return (adviceCache[key] = result); }
+
+  var latest = Math.min(now + 30 * DAY, Math.max(w.start, w.due !== null ? w.due : w.start) + 7 * DAY);
+  var tried = {};
+  var evalAt = function (t) {
+    t = Math.round(t);
+    if (!tried[t]) {
+      var e = maintEval(records, h, t);
+      tried[t] = { start: t, loss: e.loss, base: e.base, overdueDays: w.due !== null ? Math.max(0, (t - w.due) / DAY) : 0 };
+    }
+    return tried[t];
+  };
+  var sched = evalAt(w.start);
+  for (var k = -14; k <= 14; k++) {
+    var t = w.start + k * DAY;
+    if (t > now + 3600000 && t <= latest) evalAt(t);
+  }
+  // refine: try the three shift starts (6 AM, 2 PM, 10 PM) on the best day
+  var best = Object.keys(tried).map(function (x) { return tried[x]; }).sort(function (a, b) { return a.loss - b.loss || Math.abs(a.start - w.start) - Math.abs(b.start - w.start); })[0];
+  var bd = new Date(best.start);
+  ['A', 'B', 'C'].forEach(function (s) {
+    var c = new Date(bd.getFullYear(), bd.getMonth(), bd.getDate(), SHIFT_START_HOUR[s], 0, 0).getTime();
+    if (c > now + 3600000 && c <= latest) evalAt(c);
+  });
+  best = Object.keys(tried).map(function (x) { return tried[x]; }).sort(function (a, b) { return a.loss - b.loss || Math.abs(a.start - w.start) - Math.abs(b.start - w.start); })[0];
+
+  var saving = sched.loss - best.loss;
+  var threshold = Math.max(300, 0.15 * sched.loss);
+  var verdict = saving >= threshold ? (best.start < w.start ? 'prepone' : 'postpone') : 'keep';
+  var pick = function (label, t) { return t > now + 3600000 && t <= latest ? Object.assign({ label: label }, evalAt(t)) : null; };
+  var earliestSlot = null;
+  for (var kk = 0; kk <= 3; kk++) {   // the next shift start from now
+    var c0 = new Date(now + kk * DAY);
+    ['A', 'B', 'C'].forEach(function (s) {
+      var c = new Date(c0.getFullYear(), c0.getMonth(), c0.getDate(), SHIFT_START_HOUR[s], 0, 0).getTime();
+      if (!earliestSlot && c > now + 3600000) earliestSlot = c;
+    });
+  }
+  var options = [pick('Earliest', earliestSlot), Object.assign({ label: 'As planned' }, sched), Object.assign({ label: 'Best slot' }, best), pick('1 day later', w.start + DAY), pick('3 days later', w.start + 3 * DAY)]
+    .filter(function (x) { return x; });
+  // remove duplicates of the same start time (keep the first label)
+  var seen = {};
+  options = options.filter(function (x) { if (seen[x.start]) return false; seen[x.start] = true; return true; });
+
+  // Clash: another machine of the same type that is broken down or in maintenance at the same time
+  var clash = records.filter(function (r) {
+    if (r === h || r.record_type !== 'HEMM' || r.hemm_type !== h.hemm_type) return false;
+    var ow = maintWindow(r);
+    return r.status === 'Open' || (ow && ow.start < w.end && ow.end > w.start);
+  }).map(function (r) { return r.name; });
+
+  result = Object.assign(result, {
+    sched: sched, best: best, saving: saving, verdict: verdict, options: options, clash: clash,
+    crewSched: crewDuring(records, w.start, w.hours), crewBest: crewDuring(records, best.start, w.hours)
+  });
+  return (adviceCache[key] = result);
+}
+
+// The suggestion sentence for one planned maintenance (keep, prepone or postpone).
+function maintSuggestion(a) {
+  if (a.verdict === 'keep') {
+    return '<b>Keep the plan.</b>' + (a.saving >= 1 ? ' The best slot (' + niceTime(a.best.start) + ') would save only ' + formatNum(a.saving) + ' m³.' : '');
+  }
+  var late = a.best.overdueDays > 0 ? ' That is ' + a.best.overdueDays.toFixed(1) + ' days after the latest safe start; the extra breakdown risk is already counted.' : '';
+  var days = Math.round(Math.abs(a.best.start - a.w.start) / 86400000 * 10) / 10;
+  return '<b>' + (a.verdict === 'prepone' ? 'Prepone' : 'Postpone') + ' to ' + niceTime(a.best.start, true) + '</b> (' + days + ' day' + (days === 1 ? '' : 's') + (a.verdict === 'prepone' ? ' earlier' : ' later') + ') and save about <b>' + formatNum(a.saving) + ' m³</b>.' + late;
+}
+// Plain-words summary of the advice for one planned maintenance (used on the dashboard and the engineer's screen).
+function maintVerdictText(a) {
+  if (!a) return '';
+  if (a.status === 'done') return 'This maintenance is finished.';
+  if (a.status === 'ongoing') return 'This maintenance is in progress now, until ' + niceTime(a.w.end) + '.';
+  var cost = a.sched.loss < 1 ? 'costs no production (spare machines cover it)' : 'costs about ' + formatNum(a.sched.loss) + ' m³';
+  return 'As planned (' + niceTime(a.w.start, true) + ') it ' + cost + '. Suggestion: ' + maintSuggestion(a);
 }
