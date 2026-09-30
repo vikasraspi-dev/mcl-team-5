@@ -153,6 +153,38 @@ function hemmStatusClass(h) {
 function isFit(h) { return h.record_type === 'HEMM' && h.status === 'Resolved'; }
 function hemmLabel(h) { return h.name + ' (' + (h.make_model || '') + ')'; }
 
+// ---- Production, breakdown and leave settings (change the numbers here) ----
+var TRIP_MINUTES = 10;            // one dumper trip takes 10 minutes
+var M3_PER_TRIP = 16;             // one trip carries 16 m3 of overburden
+var SHIFT_MINUTES = 480;          // a shift is 8 hours
+var EXTRA_LEAVE_DAYS = 2;         // about 2 leave days a month, besides the weekly rest
+var DEFAULT_BREAKDOWN_PROB = 5;   // % chance per shift, used when a machine has no value
+var UNKNOWN_REPAIR_DAYS = 2;      // repair time assumed when the engineer gave none
+var PROJECTION_DAYS = 30;         // the projection looks 30 days ahead
+var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+var BREAKDOWN_CHOICES = [0, 1, 2, 3, 5, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50];
+
+function tripsPerShift() { return Math.floor(SHIFT_MINUTES / TRIP_MINUTES); }
+function m3PerDumperShift() { return tripsPerShift() * M3_PER_TRIP; }
+function formatNum(n) { return Math.round(n).toLocaleString('en-IN'); }
+function weekdayOf(dateStr) {
+  var p = dateStr.split('-');
+  return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10)).getDay();
+}
+function addDays(dateStr, n) {
+  var p = dateStr.split('-');
+  return dateToStr(new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10) + n));
+}
+// Why is this operator not on duty on this date? 'Weekly off', 'Leave' or null.
+function leaveReason(o, dateStr) {
+  if (o.weekly_off != null && weekdayOf(dateStr) === Number(o.weekly_off)) return 'Weekly off';
+  if ((o.leave_dates || []).indexOf(dateStr) >= 0) return 'Leave';
+  return null;
+}
+function breakdownProbOf(h) {
+  return h.breakdown_prob == null ? DEFAULT_BREAKDOWN_PROB : Number(h.breakdown_prob);
+}
+
 // ---- The automatic allocation ----
 // Input: all rows, the date (YYYY-MM-DD) and the shift (A/B/C).
 // Machines that can be given to operators in that shift:
@@ -169,10 +201,11 @@ function computeAllocation(records, dateStr, shift) {
   var etaOf = function (h) { return h.expected_ok_at ? new Date(h.expected_ok_at) : null; };
 
   var regular = ops.filter(function (o) {
-    return o.home_shift === shift && o.attendance === 'Present' && o.duty_date === dateStr;
+    return o.home_shift === shift && o.attendance === 'Present' && o.duty_date === dateStr && !leaveReason(o, dateStr);
   }).sort(byName);
   var overtimeAll = ops.filter(function (o) {
-    return o.home_shift !== shift && o.attendance === 'Overtime' && o.duty_shift === shift && o.duty_date === dateStr;
+    return o.home_shift !== shift && o.attendance === 'Overtime' && o.duty_shift === shift && o.duty_date === dateStr &&
+           (o.leave_dates || []).indexOf(dateStr) < 0;
   }).sort(byName);
   var overtimeNotAllotted = [];
   var overtimeUsed = 0;
@@ -247,4 +280,84 @@ function computeAllocation(records, dateStr, shift) {
     fitCount: hemms.filter(isFit).length,
     hemmCount: hemms.length
   };
+}
+
+// ---- Projected production ----
+// Chance of each number of "successes" out of independent chances ps (a Poisson-binomial list).
+function countChances(ps) {
+  var dist = [1];
+  ps.forEach(function (p) {
+    var next = new Array(dist.length + 1).fill(0);
+    dist.forEach(function (v, k) { next[k] += v * (1 - p); next[k + 1] += v * p; });
+    dist = next;
+  });
+  return dist;
+}
+// Expected number of dumpers running = expected smaller one of (operators available, machines available).
+function expectedMin(opChances, machineChances) {
+  var a = countChances(opChances), b = countChances(machineChances), e = 0;
+  a.forEach(function (pa, i) { b.forEach(function (pb, j) { e += pa * pb * Math.min(i, j); }); });
+  return e;
+}
+function chanceAtLeastOne(ps) {
+  return 1 - ps.reduce(function (acc, p) { return acc * (1 - p); }, 1);
+}
+// Expected overburden (m3) in one shift. Dumpers only haul when an excavator is loading.
+function shiftProduction(exOps, exMachines, duOps, duMachines) {
+  return expectedMin(duOps, duMachines) * chanceAtLeastOne(exOps) * chanceAtLeastOne(exMachines) * m3PerDumperShift();
+}
+
+// Projection for `days` days from startDateStr. Uses: weekly off, leave marked in advance,
+// about EXTRA_LEAVE_DAYS more leave days a month, each machine's breakdown chance,
+// and the expected OK time of machines now under repair.
+function projectProduction(records, startDateStr, days) {
+  var now = Date.now();
+  var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
+  var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
+  var dayList = [];
+  for (var i = 0; i < days; i++) dayList.push(addDays(startDateStr, i));
+
+  // Chance that an operator takes an unplanned leave on any one working day.
+  var extraP = {};
+  ops.forEach(function (o) {
+    var marked = 0, working = 0;
+    dayList.forEach(function (d) {
+      var r = leaveReason(o, d);
+      if (r === 'Leave') marked++; else if (!r) working++;
+    });
+    var left = Math.max(0, EXTRA_LEAVE_DAYS * days / 30 - marked);
+    extraP[o.id] = Math.min(1, left / Math.max(1, working));
+  });
+  function opChance(o, d) { return leaveReason(o, d) ? 0 : 1 - extraP[o.id]; }
+  function machineChance(h, startTime) {
+    var back = 0;
+    if (h.status !== 'Resolved') {
+      back = h.expected_ok_at ? new Date(h.expected_ok_at).getTime() : now + UNKNOWN_REPAIR_DAYS * 86400000;
+    }
+    return startTime < back ? 0 : 1 - breakdownProbOf(h) / 100;
+  }
+
+  var exMachines = hemms.filter(function (h) { return h.hemm_type === 'Excavator'; });
+  var duMachines = hemms.filter(function (h) { return h.hemm_type === 'Dumper'; });
+  var total = 0, fullTotal = 0;
+  var result = dayList.map(function (d) {
+    var perShift = SHIFTS.map(function (s) {
+      var st = shiftWindow(d, s).start.getTime();
+      var exOps = ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Excavator'; });
+      var duOps = ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Dumper'; });
+      var expected = shiftProduction(
+        exOps.map(function (o) { return opChance(o, d); }),
+        exMachines.map(function (h) { return machineChance(h, st); }),
+        duOps.map(function (o) { return opChance(o, d); }),
+        duMachines.map(function (h) { return machineChance(h, st); }));
+      var full = shiftProduction(exOps.map(function () { return 1; }), exMachines.map(function () { return 1; }),
+        duOps.map(function () { return 1; }), duMachines.map(function () { return 1; }));
+      fullTotal += full;
+      return expected;
+    });
+    var dayTotal = perShift.reduce(function (a, b) { return a + b; }, 0);
+    total += dayTotal;
+    return { date: d, total: dayTotal, shifts: perShift };
+  });
+  return { days: result, total: total, fullTotal: fullTotal, average: total / days };
 }

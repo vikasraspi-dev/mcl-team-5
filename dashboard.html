@@ -27,6 +27,12 @@
     <h2 id="alloc-title">Allocation</h2>
     <div class="card" id="alloc-list"><p class="muted">Loading...</p></div>
 
+    <h2>Projected production: next 30 days</h2>
+    <div id="projection-tiles"></div>
+    <div class="card"><div class="chart-box"><canvas id="chart-proj"></canvas></div>
+      <p class="legend-note" id="proj-text"></p></div>
+    <div class="card"><h3>How this is worked out</h3><ul class="muted" id="proj-assumptions" style="margin:4px 0;padding-left:20px"></ul></div>
+
     <h2>Free manpower</h2>
     <div class="card" id="manpower"></div>
 
@@ -96,14 +102,25 @@
 
     function render() {
       drawShiftButtons();
+      drawProjection();
       var a = computeAllocation(records, selDate, selShift);
       var where = 'Shift ' + selShift + ', ' + niceDate(selDate);
+
+      // Planned production for this shift: dumpers running x trips x m3, only if an excavator is running.
+      var dumpersRunning = a.assignments.filter(function (x) { return x.hemm.hemm_type === 'Dumper'; }).length;
+      var excavatorRunning = a.assignments.some(function (x) { return x.hemm.hemm_type === 'Excavator'; });
+      var plannedM3 = excavatorRunning ? dumpersRunning * m3PerDumperShift() : 0;
+      var onLeaveCount = records.filter(function (r) {
+        return r.record_type === 'OPERATOR' && r.home_shift === selShift && leaveReason(r, selDate);
+      }).length;
 
       document.getElementById('summary').innerHTML = '<div class="tiles" style="margin-top:12px">' +
         tile(a.fitCount + ' / ' + a.hemmCount, 'HEMMs OK') +
         tile(a.availableCount, 'Operators available') +
         tile(a.assignments.length, 'Machines running') +
-        tile(a.idleHemms.length, 'OK machines with no operator') + '</div>';
+        tile(a.idleHemms.length, 'OK machines with no operator') +
+        tile(onLeaveCount, 'Operators on weekly off / leave') +
+        tile(formatNum(plannedM3) + ' m³', 'Planned production this shift') + '</div>';
 
       document.getElementById('alloc-title').textContent = 'Allocation: ' + where;
       document.getElementById('alloc-list').innerHTML = a.assignments.length ? a.assignments.map(function (x) {
@@ -153,21 +170,64 @@
 
       // Chart 2: operators per shift for the chosen date
       var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
-      var home = function (s, att) { return ops.filter(function (o) { return o.home_shift === s && o.duty_date === selDate && o.attendance === att; }).length; };
+      var homeOps = function (s) { return ops.filter(function (o) { return o.home_shift === s; }); };
+      var off = function (s) { return homeOps(s).filter(function (o) { return leaveReason(o, selDate); }).length; };
+      var home = function (s, att) { return homeOps(s).filter(function (o) { return !leaveReason(o, selDate) && o.duty_date === selDate && o.attendance === att; }).length; };
       var ot = function (s) { return ops.filter(function (o) { return o.home_shift !== s && o.attendance === 'Overtime' && o.duty_shift === s && o.duty_date === selDate; }).length; };
-      var notMarked = function (s) {
-        var total = ops.filter(function (o) { return o.home_shift === s; }).length;
-        return total - home(s, 'Present') - home(s, 'Absent');
-      };
+      var notMarked = function (s) { return homeOps(s).length - off(s) - home(s, 'Present') - home(s, 'Absent'); };
       drawChart('ops', 'chart-ops', SHIFTS.map(function (s) { return 'Shift ' + s; }), [
         { label: 'Present', backgroundColor: '#2a78d6', data: SHIFTS.map(function (s) { return home(s, 'Present'); }) },
         { label: 'Overtime from other shift', backgroundColor: '#eb6834', data: SHIFTS.map(ot) },
         { label: 'Absent', backgroundColor: '#1baf7a', data: SHIFTS.map(function (s) { return home(s, 'Absent'); }) },
+        { label: 'Weekly off / leave', backgroundColor: '#eda100', data: SHIFTS.map(off) },
         { label: 'Not marked yet', backgroundColor: '#898781', data: SHIFTS.map(notMarked) }
       ]);
       document.getElementById('ops-text').textContent = SHIFTS.map(function (s) {
-        return 'Shift ' + s + ': ' + home(s, 'Present') + ' present, ' + ot(s) + ' overtime, ' + home(s, 'Absent') + ' absent, ' + notMarked(s) + ' not marked';
+        return 'Shift ' + s + ': ' + home(s, 'Present') + ' present, ' + ot(s) + ' overtime, ' + home(s, 'Absent') + ' absent, ' + off(s) + ' weekly off / leave, ' + notMarked(s) + ' not marked';
       }).join('. ') + '. Date: ' + niceDate(selDate) + '.';
+    }
+    function drawProjection() {
+      var P = projectProduction(records, selDate, PROJECTION_DAYS);
+      var pct = P.fullTotal ? Math.round(100 * P.total / P.fullTotal) : 0;
+      document.getElementById('projection-tiles').innerHTML = '<div class="tiles">' +
+        tile(formatNum(P.total) + ' m³', 'Projected in ' + PROJECTION_DAYS + ' days') +
+        tile(formatNum(P.average) + ' m³', 'Average per day') +
+        tile(formatNum(P.fullTotal) + ' m³', 'Full strength (no breakdown, no leave)') +
+        tile(pct + '%', 'Projected vs full strength') + '</div>';
+      document.getElementById('proj-assumptions').innerHTML = [
+        'One dumper trip takes ' + TRIP_MINUTES + ' minutes and carries ' + M3_PER_TRIP + ' m³ of overburden.',
+        'A shift is ' + (SHIFT_MINUTES / 60) + ' hours, so one dumper makes ' + tripsPerShift() + ' trips = ' + formatNum(m3PerDumperShift()) + ' m³ per shift.',
+        'Dumpers haul only when an excavator with an operator is working. Grader and sprinklers do not add production.',
+        'Each machine has a breakdown chance per shift (set by the engineer). A machine under repair returns at its expected OK time (' + UNKNOWN_REPAIR_DAYS + ' days if not given).',
+        'Each operator has one weekly off, leave days marked in advance, and about ' + EXTRA_LEAVE_DAYS + ' more leave days a month.',
+        'Overtime is not counted. Operators work only their own shift.'
+      ].map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('');
+      drawLine('proj', 'chart-proj', P.days.map(function (d) { return niceDate(d.date).replace(/ \d{4}$/, ''); }), P.days.map(function (d) { return Math.round(d.total); }), Math.round(P.fullTotal / P.days.length));
+      var lo = P.days.reduce(function (m, d) { return d.total < m.total ? d : m; }, P.days[0]);
+      document.getElementById('proj-text').textContent = 'Lowest day: ' + niceDate(lo.date) + ' (' + formatNum(lo.total) + ' m³). Full strength is ' + formatNum(P.fullTotal / P.days.length) + ' m³ every day.';
+    }
+    function drawLine(key, canvasId, labels, values, fullPerDay) {
+      if (typeof Chart === 'undefined') { return; }
+      var ink = css('--ink2'), grid = css('--line'), surface = css('--surface');
+      if (charts[key]) charts[key].destroy();
+      charts[key] = new Chart(document.getElementById(canvasId), {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            { type: 'bar', label: 'Projected per day (m³)', data: values, backgroundColor: '#2a78d6', borderColor: surface, borderWidth: 2, borderRadius: 4 },
+            { type: 'line', label: 'Full strength per day', data: values.map(function () { return fullPerDay; }), borderColor: '#898781', borderDash: [6, 4], borderWidth: 2, pointRadius: 0 }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { position: 'bottom', labels: { color: ink, boxWidth: 14, font: { size: 13 } } } },
+          scales: {
+            x: { ticks: { color: ink, maxTicksLimit: 8 }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { color: ink }, grid: { color: grid } }
+          }
+        }
+      });
     }
     function tile(num, label) { return '<div class="tile"><div class="num">' + num + '</div><div class="lbl">' + label + '</div></div>'; }
 
