@@ -71,13 +71,27 @@
   commit and push.
 
 ## Our tool (filled in during Phase 1)
-- Team:
-- Tool name:
-- Problem:
-- Who records / who decides:
-- Table name and columns:
-- Pages: index.html = entry page; dashboard.html = dashboard
+- Team: MCL Team 5 (IIM Sambalpur MDP)
+- Tool name: HEMM Shift Allocator
+- Problem: Matching HEMMs (heavy machines) with operators shift by shift is done by hand. The tool does it automatically from the engineer's and operators' inputs.
+- Who records / who decides: Maintenance Engineer marks each HEMM OK / under repair / breakdown. Operators mark Present / Absent, or raise Overtime interest for another shift. Shift Incharge views the automatic allocation and can mark attendance for an operator who phones in.
+- "Roles" (not real logins, because rule 6 says no login): the user picks a role on index.html and it is remembered on that phone. Operators also pick their name.
+- Table name and columns: dispatch_records (one table; rows are either HEMM or OPERATOR).
+  Columns: id, created_at, updated_at, record_type (HEMM/OPERATOR), name, skill_group (Excavator/Dumper/Grader-Sprinkler),
+  hemm_type, make_model, serial_no (HEMM only), home_shift, attendance (Not marked/Present/Absent/Overtime),
+  duty_date, duty_shift (operator only), location, urgency (Low/Medium/High), status (Open/In progress/Resolved), remarks.
+  Meaning of status for a HEMM: Resolved = OK (fit), In progress = under repair, Open = breakdown.
+  For an operator: Open = not answered, Resolved = answered Present/Absent, In progress = overtime interest raised.
+- Fleet (made up data): 2 Tata Hitachi 1200 excavators (sl. 1, 2); 6 BEML BH60M dumpers (60019, 60020, 60459, 60450, 60998, 60999);
+  1 motor grader BG825 (21156); 2 BEML WS28-2 water sprinklers (28358, 28386).
+  Operators per shift (A, B, C): 1 excavator, 4 dumper, 2 grader/sprinkler = 21 operators with made-up Indian names.
+- Allocation rule (in app.js, function computeAllocation): only fit HEMMs and available operators (own shift Present, or Overtime for that shift and date).
+  Operators only get machines of their own skill group. Own-shift operators are used first, overtime operators fill what is left.
+  Priority: excavators, dumpers, then 1st water sprinkler, motor grader, 2nd water sprinkler.
+- Pages: index.html = entry page (choose role); work.html = "My Work" (screen depends on role); dashboard.html = dashboard.
+  Shared files: style.css (look), app.js (database link, header, allocation rule).
 
 ## Progress Log (newest entry at the bottom)
 - Phase 0 (starter): placeholder index.html, config.js without settings and
   this CLAUDE.md. Next: Phase 1 - the table and the entry page.
+- Phase 1 (Claude, session 1): built the whole first version. Files: database/01-setup.sql (table, security rules, 11 HEMMs, 21 operators), style.css, app.js, index.html, work.html, dashboard.html. The old Tailwind prototype index.html was replaced because it broke the technical rules. What works (checked only with a stand-in database, not the real one): role choice, engineer screen, operator screen, incharge screen, automatic allocation, dashboard with two charts. Known problems: not yet tested on the live site; one answer per operator at a time (a new answer replaces the old one); HEMM OK status is one setting for all shifts. Next step: Data Keeper runs database/01-setup.sql, then the team tests on the live site.
