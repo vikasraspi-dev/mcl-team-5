@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b57d0">
   <title>HEMM Shift Allocator</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -12,16 +13,19 @@
 <body>
   <header id="site-header"></header>
   <main>
-    <h1>Welcome</h1>
-    <p>This tool gives HEMMs (heavy machines) to operators, shift by shift, automatically.</p>
-    <p class="muted">The engineer marks which machines are OK. Operators say if they will be present. The tool then matches them.</p>
+    <section class="hero">
+      <h1>Welcome</h1>
+      <p>This tool gives HEMMs (heavy machines) to operators, shift by shift, automatically. It picks the best combination so that production is as high as possible.</p>
+    </section>
 
     <div id="message" class="hidden"></div>
 
     <h2>Choose your role</h2>
-    <button class="btn role-btn" id="role-incharge">Shift Incharge<small>See who drives what. Help with attendance.</small></button>
-    <button class="btn role-btn" id="role-engineer">Maintenance Engineer<small>Mark which HEMMs are OK.</small></button>
-    <button class="btn role-btn" id="role-operator">Operator<small>Mark present or absent. Ask for overtime.</small></button>
+    <div class="grid wide">
+      <button class="btn role-btn" id="role-incharge"><span id="ic1"></span><span>Shift Incharge<small>See who drives what. Help with attendance.</small></span></button>
+      <button class="btn role-btn" id="role-engineer"><span id="ic2"></span><span>Maintenance Engineer<small>Mark which HEMMs are OK and when.</small></span></button>
+      <button class="btn role-btn" id="role-operator"><span id="ic3"></span><span>Operator<small>Mark present or absent. Plan leave. Ask for overtime.</small></span></button>
+    </div>
 
     <div id="operator-pick" class="card hidden">
       <label for="operator-select">Who are you?</label>
@@ -29,11 +33,20 @@
       <button class="btn" id="operator-go">Continue</button>
     </div>
 
+    <div class="card tonal">
+      <h3>How it works</h3>
+      <p class="muted">1. The engineer marks each machine OK, under repair or broken down, with the time it will be OK.</p>
+      <p class="muted">2. Operators mark Present or Absent and plan their leave on a calendar.</p>
+      <p class="muted">3. The tool matches the most efficient operators with the most reliable machines and shows the result on the Dashboard.</p>
+    </div>
     <p class="muted">There is no password in this tool. Anyone with the link can choose any role. All data here is made up.</p>
   </main>
 
   <script>
     renderHeader('index.html');
+    document.getElementById('ic1').innerHTML = icon('groups');
+    document.getElementById('ic2').innerHTML = icon('work');
+    document.getElementById('ic3').innerHTML = icon('person');
 
     function goAfterRole(role) {
       store('hemm_role', role);
@@ -64,6 +77,7 @@
               esc(o.name) + ' (' + esc(o.skill_group) + ')</option>';
           }).join('') + '</optgroup>';
         }).join('');
+        pick.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } catch (err) {
         sel.innerHTML = '<option value="">Could not load names</option>';
         showError('Could not load the operator names.', err);

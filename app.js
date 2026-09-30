@@ -82,21 +82,45 @@ function recall(key) { try { return localStorage.getItem(key); } catch (e) { ret
 function getRole() { return recall('hemm_role'); }
 function getOperatorId() { return recall('hemm_operator_id'); }
 
-// ---- Header and menu, the same on every page ----
+// ---- Icons (small pictures drawn inside the page, no downloads) ----
+var ICONS = {
+  home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
+  work: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.9 4.9C.8 7.3 1.2 10.3 3.2 12.3c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.1-2.1c.4-.4.4-1.1 0-1.5z',
+  dashboard: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
+  person: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
+  groups: 'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z',
+  chart: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z',
+  event: 'M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2zm-8 4H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z',
+  check: 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
+  truck: 'M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z'
+};
+function icon(name, small) {
+  return '<svg class="ic' + (small ? ' sm' : '') + '" viewBox="0 0 24 24" aria-hidden="true"><path d="' + (ICONS[name] || '') + '"/></svg>';
+}
+
+// A round badge with a letter: E excavator, D dumper, G grader, W water sprinkler.
+function avatar(kind) {
+  var m = { 'Excavator': ['av-ex', 'E'], 'Dumper': ['av-du', 'D'], 'Motor Grader': ['av-gs', 'G'],
+            'Water Sprinkler': ['av-gs', 'W'], 'Grader/Sprinkler': ['av-gs', 'GS'] }[kind] || ['av-du', '?'];
+  return '<span class="avatar ' + m[0] + '">' + m[1] + '</span>';
+}
+
+// ---- App bar and navigation, the same on every page ----
 function renderHeader(activePage) {
   var el = document.getElementById('site-header');
   if (!el) return;
   var role = getRole();
-  var who = ROLE_NAMES[role] ? 'Role: ' + ROLE_NAMES[role] : 'No role chosen';
-  var links = [['index.html', 'Home'], ['work.html', 'My Work'], ['dashboard.html', 'Dashboard']];
-  var menu = links.map(function (l) {
-    return '<a href="' + l[0] + '"' + (l[0] === activePage ? ' class="active"' : '') + '>' + l[1] + '</a>';
+  var who = ROLE_NAMES[role] || 'Choose role';
+  var links = [['index.html', 'Home', 'home'], ['work.html', 'My Work', 'work'], ['dashboard.html', 'Dashboard', 'dashboard']];
+  var nav = links.map(function (l) {
+    return '<a href="' + l[0] + '"' + (l[0] === activePage ? ' class="active"' : '') + '><span class="pill">' + icon(l[2]) + '</span><span>' + l[1] + '</span></a>';
   }).join('');
   el.className = 'site-header';
   el.innerHTML =
-    '<div class="top"><span class="title">HEMM Shift Allocator</span>' +
-    '<span class="who">' + esc(who) + ' &middot; <a href="index.html">change</a></span></div>' +
-    '<nav class="menu">' + menu + '</nav>';
+    '<div class="appbar-top"><div class="brand"><span class="logo">' + icon('truck') + '</span>' +
+    '<div><div class="title">HEMM Shift Allocator</div><div class="subtitle">MCL Team 5</div></div></div>' +
+    '<a class="role-chip" href="index.html">' + icon('person') + esc(who) + '</a></div>' +
+    '<nav class="nav">' + nav + '</nav>';
 }
 
 // ---- Friendly messages (errors always show the real error text) ----
@@ -159,6 +183,7 @@ var M3_PER_TRIP = 16;             // one trip carries 16 m3 of overburden
 var SHIFT_MINUTES = 480;          // a shift is 8 hours
 var EXTRA_LEAVE_DAYS = 2;         // about 2 leave days a month, besides the weekly rest
 var DEFAULT_BREAKDOWN_PROB = 5;   // % chance per shift, used when a machine has no value
+var DEFAULT_EFFICIENCY = 85;      // % used when an operator has no efficiency value
 var UNKNOWN_REPAIR_DAYS = 2;      // repair time assumed when the engineer gave none
 var PROJECTION_DAYS = 30;         // the projection looks 30 days ahead
 var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -181,6 +206,10 @@ function leaveReason(o, dateStr) {
   if ((o.leave_dates || []).indexOf(dateStr) >= 0) return 'Leave';
   return null;
 }
+// Operator efficiency as a fraction (0.92 = 92% of the standard trips per shift).
+function effOf(o) {
+  return (o.efficiency == null ? DEFAULT_EFFICIENCY : Number(o.efficiency)) / 100;
+}
 function breakdownProbOf(h) {
   return h.breakdown_prob == null ? DEFAULT_BREAKDOWN_PROB : Number(h.breakdown_prob);
 }
@@ -196,7 +225,9 @@ function breakdownProbOf(h) {
 function computeAllocation(records, dateStr, shift) {
   var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
   var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
-  var byName = function (a, b) { return a.name.localeCompare(b.name); };
+  // Best combination: the most efficient operators are used first, and they get the
+  // most reliable machines (lowest breakdown chance) of the highest-priority type.
+  var byName = function (a, b) { return effOf(b) - effOf(a) || a.name.localeCompare(b.name); };
   var win = shiftWindow(dateStr, shift);
   var etaOf = function (h) { return h.expected_ok_at ? new Date(h.expected_ok_at) : null; };
 
@@ -214,7 +245,10 @@ function computeAllocation(records, dateStr, shift) {
   var usable = hemms.filter(function (h) {
     var eta = etaOf(h);
     return isFit(h) || (eta && eta <= win.start);
-  }).sort(function (a, b) { return String(a.serial_no).localeCompare(String(b.serial_no), undefined, { numeric: true }); });
+  }).sort(function (a, b) {
+    return breakdownProbOf(a) - breakdownProbOf(b) ||
+           String(a.serial_no).localeCompare(String(b.serial_no), undefined, { numeric: true });
+  });
   var seen = {};
   var ranked = usable.map(function (h) {
     seen[h.hemm_type] = seen[h.hemm_type] || 0;
@@ -238,9 +272,9 @@ function computeAllocation(records, dateStr, shift) {
     var regG = regular.filter(function (o) { return o.skill_group === group; });
     var otG = overtimeAll.filter(function (o) { return o.skill_group === group; });
     machines.forEach(function (h, i) {
-      if (regG[i]) assignments.push({ hemm: h, operator: regG[i], overtime: false, expected: !isFit(h) });
+      if (regG[i]) assignments.push({ hemm: h, operator: regG[i], overtime: false, expected: !isFit(h), eff: effOf(regG[i]) });
       else if (otG[i - regG.length]) {
-        assignments.push({ hemm: h, operator: otG[i - regG.length], overtime: true, expected: !isFit(h) });
+        assignments.push({ hemm: h, operator: otG[i - regG.length], overtime: true, expected: !isFit(h), eff: effOf(otG[i - regG.length]) });
         overtimeUsed++;
       } else idleHemms.push(h);
     });
@@ -268,7 +302,24 @@ function computeAllocation(records, dateStr, shift) {
     });
   });
 
+  // Production of this shift's plan. The excavator operator's efficiency is the loading speed;
+  // each dumper adds trips x m3 x its operator's efficiency. "Expected" also counts breakdown chances.
+  var exA = assignments.filter(function (x) { return x.hemm.hemm_type === 'Excavator'; })[0];
+  var plannedM3 = 0, expectedM3 = 0;
+  if (exA) {
+    var exExpect = exA.eff * (1 - breakdownProbOf(exA.hemm) / 100);
+    assignments.forEach(function (x) {
+      if (x.hemm.hemm_type !== 'Dumper') return;
+      var m3 = m3PerDumperShift() * x.eff;
+      x.m3 = m3 * exA.eff;
+      plannedM3 += m3 * exA.eff;
+      expectedM3 += m3 * (1 - breakdownProbOf(x.hemm) / 100) * exExpect;
+    });
+  }
+
   return {
+    plannedM3: plannedM3,
+    expectedM3: expectedM3,
     assignments: assignments,
     idleHemms: idleHemms,
     idleOperators: idleOperators,
@@ -293,18 +344,35 @@ function countChances(ps) {
   });
   return dist;
 }
-// Expected number of dumpers running = expected smaller one of (operators available, machines available).
-function expectedMin(opChances, machineChances) {
-  var a = countChances(opChances), b = countChances(machineChances), e = 0;
-  a.forEach(function (pa, i) { b.forEach(function (pb, j) { e += pa * pb * Math.min(i, j); }); });
-  return e;
+// Every way a list of operators {p: chance present, eff: efficiency} can turn up.
+// Returns [{prob, effs}] where effs are the efficiencies of those present, best first.
+function attendanceCases(ops) {
+  var cases = [];
+  for (var mask = 0; mask < (1 << ops.length); mask++) {
+    var prob = 1, effs = [];
+    ops.forEach(function (o, k) {
+      if (mask & (1 << k)) { prob *= o.p; effs.push(o.eff); } else { prob *= 1 - o.p; }
+    });
+    if (prob > 0) cases.push({ prob: prob, effs: effs.sort(function (a, b) { return b - a; }) });
+  }
+  return cases;
 }
 function chanceAtLeastOne(ps) {
   return 1 - ps.reduce(function (acc, p) { return acc * (1 - p); }, 1);
 }
-// Expected overburden (m3) in one shift. Dumpers only haul when an excavator is loading.
+// Expected overburden (m3) in one shift, when the best operators are given the machines that are running.
+// Dumpers haul only when an excavator is loading; the excavator operator's efficiency scales the loading.
 function shiftProduction(exOps, exMachines, duOps, duMachines) {
-  return expectedMin(duOps, duMachines) * chanceAtLeastOne(exOps) * chanceAtLeastOne(exMachines) * m3PerDumperShift();
+  var machineCount = countChances(duMachines), dumperSum = 0;
+  attendanceCases(duOps).forEach(function (c) {
+    var prefix = [0];
+    c.effs.forEach(function (e, k) { prefix.push(prefix[k] + e); });
+    machineCount.forEach(function (pm, m) { dumperSum += c.prob * pm * prefix[Math.min(m, c.effs.length)]; });
+  });
+  var loading = 0;
+  attendanceCases(exOps).forEach(function (c) { if (c.effs.length) loading += c.prob * c.effs[0]; });
+  loading *= chanceAtLeastOne(exMachines);
+  return dumperSum * loading * m3PerDumperShift();
 }
 
 // Projection for `days` days from startDateStr. Uses: weekly off, leave marked in advance,
@@ -346,12 +414,12 @@ function projectProduction(records, startDateStr, days) {
       var exOps = ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Excavator'; });
       var duOps = ops.filter(function (o) { return o.home_shift === s && o.skill_group === 'Dumper'; });
       var expected = shiftProduction(
-        exOps.map(function (o) { return opChance(o, d); }),
+        exOps.map(function (o) { return { p: opChance(o, d), eff: effOf(o) }; }),
         exMachines.map(function (h) { return machineChance(h, st); }),
-        duOps.map(function (o) { return opChance(o, d); }),
+        duOps.map(function (o) { return { p: opChance(o, d), eff: effOf(o) }; }),
         duMachines.map(function (h) { return machineChance(h, st); }));
-      var full = shiftProduction(exOps.map(function () { return 1; }), exMachines.map(function () { return 1; }),
-        duOps.map(function () { return 1; }), duMachines.map(function () { return 1; }));
+      var full = shiftProduction(exOps.map(function (o) { return { p: 1, eff: effOf(o) }; }), exMachines.map(function () { return 1; }),
+        duOps.map(function (o) { return { p: 1, eff: effOf(o) }; }), duMachines.map(function () { return 1; }));
       fullTotal += full;
       return expected;
     });

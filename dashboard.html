@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b57d0">
   <title>Dashboard - HEMM Shift Allocator</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -19,19 +20,28 @@
 
     <label for="d-date">Date</label>
     <input type="date" id="d-date">
-    <div class="btn-row" id="shift-buttons" style="margin-top:8px"></div>
+    <div class="seg" id="shift-buttons"></div>
     <button class="btn secondary" id="refresh">Refresh now</button>
 
-    <div id="summary"></div>
+    <div id="summary" style="margin-top:8px"></div>
 
     <h2 id="alloc-title">Allocation</h2>
     <div class="card" id="alloc-list"><p class="muted">Loading...</p></div>
+
+    <h2>Machines</h2>
+    <div class="grid" id="machine-grid"></div>
+
+    <h2>Operators</h2>
+    <div class="btn-row" style="max-width:420px">
+      <button class="btn secondary small" id="ops-toggle">Show all shifts</button>
+    </div>
+    <div class="grid" id="operator-grid" style="margin-top:10px"></div>
 
     <h2>Projected production: next 30 days</h2>
     <div id="projection-tiles"></div>
     <div class="card"><div class="chart-box"><canvas id="chart-proj"></canvas></div>
       <p class="legend-note" id="proj-text"></p></div>
-    <div class="card"><h3>How this is worked out</h3><ul class="muted" id="proj-assumptions" style="margin:4px 0;padding-left:20px"></ul></div>
+    <div class="card tonal"><h3>How this is worked out</h3><ul class="muted" id="proj-assumptions" style="margin:4px 0;padding-left:20px"></ul></div>
 
     <h2>Free manpower</h2>
     <div class="card" id="manpower"></div>
@@ -54,15 +64,17 @@
     var selDate = info.date, selShift = info.shift;
     var records = [];
     var charts = {};
+    var showAllOps = false;
 
     var dateInput = document.getElementById('d-date');
     dateInput.value = selDate;
     dateInput.onchange = function () { selDate = dateInput.value || selDate; render(); };
     document.getElementById('refresh').onclick = function () { clearMessage(); load(); };
+    document.getElementById('ops-toggle').onclick = function () { showAllOps = !showAllOps; render(); };
 
     function drawShiftButtons() {
       document.getElementById('shift-buttons').innerHTML = SHIFTS.map(function (s) {
-        return '<button class="btn secondary' + (s === selShift ? ' on' : '') + '" data-shift="' + s + '">Shift ' + s + '<br><small>' + SHIFT_TIMES[s] + '</small></button>';
+        return '<button class="' + (s === selShift ? 'on' : '') + '" data-shift="' + s + '">Shift ' + s + '<small>' + SHIFT_TIMES[s] + '</small></button>';
       }).join('');
     }
     document.getElementById('shift-buttons').addEventListener('click', function (e) {
@@ -99,64 +111,153 @@
         }
       });
     }
+    function drawLine(key, canvasId, labels, values, fullPerDay) {
+      if (typeof Chart === 'undefined') { return; }
+      var ink = css('--ink2'), grid = css('--line'), surface = css('--surface');
+      if (charts[key]) charts[key].destroy();
+      charts[key] = new Chart(document.getElementById(canvasId), {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            { type: 'bar', label: 'Projected per day (m³)', data: values, backgroundColor: '#2a78d6', borderColor: surface, borderWidth: 2, borderRadius: 4 },
+            { type: 'line', label: 'Best case per day', data: values.map(function () { return fullPerDay; }), borderColor: '#898781', borderDash: [6, 4], borderWidth: 2, pointRadius: 0 }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { position: 'bottom', labels: { color: ink, boxWidth: 14, font: { size: 13 } } } },
+          scales: {
+            x: { ticks: { color: ink, maxTicksLimit: 8 }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { color: ink }, grid: { color: grid } }
+          }
+        }
+      });
+    }
+    function tile(num, label, ic) {
+      return '<div class="tile"><div class="ico">' + icon(ic || 'chart') + '</div><div class="num">' + num + '</div><div class="lbl">' + label + '</div></div>';
+    }
+
+    function drawProjection() {
+      var P = projectProduction(records, selDate, PROJECTION_DAYS);
+      var pct = P.fullTotal ? Math.round(100 * P.total / P.fullTotal) : 0;
+      document.getElementById('projection-tiles').innerHTML = '<div class="tiles">' +
+        tile(formatNum(P.total) + ' m³', 'Projected in ' + PROJECTION_DAYS + ' days', 'chart') +
+        tile(formatNum(P.average) + ' m³', 'Average per day', 'chart') +
+        tile(formatNum(P.fullTotal) + ' m³', 'Best case (everyone present, no breakdown)', 'check') +
+        tile(pct + '%', 'Projected vs best case', 'dashboard') + '</div>';
+      document.getElementById('proj-assumptions').innerHTML = [
+        'One dumper trip takes ' + TRIP_MINUTES + ' minutes and carries ' + M3_PER_TRIP + ' m³ of overburden.',
+        'A shift is ' + (SHIFT_MINUTES / 60) + ' hours, so one dumper at 100% efficiency makes ' + tripsPerShift() + ' trips = ' + formatNum(m3PerDumperShift()) + ' m³ per shift.',
+        'Each operator has an efficiency (for example 90% means 90% of those trips). The most efficient operators get the most reliable machines.',
+        'Dumpers haul only when an excavator with an operator is working. The excavator operator\'s efficiency scales the loading.',
+        'Each machine has a breakdown chance per shift. A machine under repair returns at its expected OK time (' + UNKNOWN_REPAIR_DAYS + ' days if not given).',
+        'Each operator has one weekly off, leave days marked on the calendar, and about ' + EXTRA_LEAVE_DAYS + ' more leave days a month.',
+        'Overtime is not counted. Operators work only their own shift.'
+      ].map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('');
+      drawLine('proj', 'chart-proj', P.days.map(function (d) { return niceDate(d.date).replace(/ \d{4}$/, ''); }),
+        P.days.map(function (d) { return Math.round(d.total); }), Math.round(P.fullTotal / P.days.length));
+      var lo = P.days.reduce(function (m, d) { return d.total < m.total ? d : m; }, P.days[0]);
+      document.getElementById('proj-text').textContent = 'Lowest day: ' + niceDate(lo.date) + ' (' + formatNum(lo.total) + ' m³). Best case is ' + formatNum(P.fullTotal / P.days.length) + ' m³ every day.';
+    }
 
     function render() {
       drawShiftButtons();
       drawProjection();
       var a = computeAllocation(records, selDate, selShift);
       var where = 'Shift ' + selShift + ', ' + niceDate(selDate);
+      var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
+      var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
 
-      // Planned production for this shift: dumpers running x trips x m3, only if an excavator is running.
-      var dumpersRunning = a.assignments.filter(function (x) { return x.hemm.hemm_type === 'Dumper'; }).length;
-      var excavatorRunning = a.assignments.some(function (x) { return x.hemm.hemm_type === 'Excavator'; });
-      var plannedM3 = excavatorRunning ? dumpersRunning * m3PerDumperShift() : 0;
-      var onLeaveCount = records.filter(function (r) {
-        return r.record_type === 'OPERATOR' && r.home_shift === selShift && leaveReason(r, selDate);
-      }).length;
+      var onLeaveCount = ops.filter(function (r) { return r.home_shift === selShift && leaveReason(r, selDate); }).length;
+      document.getElementById('summary').innerHTML = '<div class="tiles">' +
+        tile(a.fitCount + ' / ' + a.hemmCount, 'HEMMs OK', 'truck') +
+        tile(a.availableCount, 'Operators available', 'groups') +
+        tile(a.assignments.length, 'Machines running', 'work') +
+        tile(onLeaveCount, 'Operators on weekly off / leave', 'event') +
+        tile(formatNum(a.plannedM3) + ' m³', 'Planned production this shift', 'chart') + '</div>';
 
-      document.getElementById('summary').innerHTML = '<div class="tiles" style="margin-top:12px">' +
-        tile(a.fitCount + ' / ' + a.hemmCount, 'HEMMs OK') +
-        tile(a.availableCount, 'Operators available') +
-        tile(a.assignments.length, 'Machines running') +
-        tile(a.idleHemms.length, 'OK machines with no operator') +
-        tile(onLeaveCount, 'Operators on weekly off / leave') +
-        tile(formatNum(plannedM3) + ' m³', 'Planned production this shift') + '</div>';
-
+      // ---- Allocation list ----
       document.getElementById('alloc-title').textContent = 'Allocation: ' + where;
-      document.getElementById('alloc-list').innerHTML = a.assignments.length ? a.assignments.map(function (x) {
+      document.getElementById('alloc-list').innerHTML = (a.assignments.length ? a.assignments.map(function (x) {
         return '<div class="pair"><div><b>' + esc(x.operator.name) + '</b>' +
           (x.overtime ? ' <span class="badge info">Overtime, Shift ' + x.operator.home_shift + '</span>' : '') +
-          '<br><span class="muted">' + esc(x.operator.skill_group) + '</span></div>' +
+          '<br><span class="muted">' + esc(x.operator.skill_group) + ' &middot; efficiency ' + Math.round(x.eff * 100) + '%</span></div>' +
           '<div class="arrow">drives</div>' +
           '<div><b>' + esc(x.hemm.name) + '</b>' +
           (x.expected ? ' <span class="badge warn">Expected OK by ' + niceTime(x.hemm.expected_ok_at) + '</span>' : '') +
-          '<br><span class="muted">' + esc(x.hemm.make_model) + '</span></div></div>';
-      }).join('') : '<p class="muted">No allocation yet. It appears when operators mark Present (or Overtime) and machines are OK.</p>';
+          '<br><span class="muted">' + esc(x.hemm.make_model) + ' &middot; breakdown chance ' + breakdownProbOf(x.hemm) + '%' +
+          (x.m3 ? ' &middot; about ' + formatNum(x.m3) + ' m³' : '') + '</span></div></div>';
+      }).join('') + '<p class="muted" style="margin-top:10px">Best combination: the most efficient operators get the most reliable machines. ' +
+        'Planned ' + formatNum(a.plannedM3) + ' m³; after breakdown chances about ' + formatNum(a.expectedM3) + ' m³.</p>'
+        : '<p class="muted">No allocation yet. It appears when operators mark Present (or Overtime) and machines are OK.</p>');
 
-      // Free manpower: operators present but with no machine, and what they can do.
+      // ---- Machines grid ----
+      var driverOf = {};
+      a.assignments.forEach(function (x) { driverOf[x.hemm.id] = x; });
+      var order = { 'Excavator': 0, 'Dumper': 1, 'Water Sprinkler': 2, 'Motor Grader': 3 };
+      document.getElementById('machine-grid').innerHTML = hemms.slice().sort(function (p, q) {
+        return order[p.hemm_type] - order[q.hemm_type] || String(p.serial_no).localeCompare(String(q.serial_no), undefined, { numeric: true });
+      }).map(function (h) {
+        var d = driverOf[h.id];
+        var eta = h.status !== 'Resolved' ? (h.expected_ok_at ? 'Expected OK ' + niceTime(h.expected_ok_at) : 'Repair time not given') : '';
+        return '<div class="tcard ' + hemmStatusClass(h) + '"><div class="head">' + avatar(h.hemm_type) +
+          '<div><h3>' + esc(h.name) + '</h3><span class="muted">' + esc(h.make_model) + '</span></div></div>' +
+          '<div><span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span> <span class="badge none">Breakdown chance ' + breakdownProbOf(h) + '%</span></div>' +
+          (eta ? '<span class="muted">' + esc(eta) + ' &middot; ' + esc(h.location) + '</span>' : '') +
+          '<div class="foot">' + (d ? '<span class="badge info">' + esc(d.operator.name) + '</span>' : '<span class="badge none">No operator in Shift ' + selShift + '</span>') + '</div></div>';
+      }).join('');
+
+      // ---- Operators grid ----
+      var machineOf = {};
+      a.assignments.forEach(function (x) { machineOf[x.operator.id] = x.hemm; });
+      document.getElementById('ops-toggle').textContent = showAllOps ? 'Show only Shift ' + selShift : 'Show all shifts';
+      var shown = ops.filter(function (o) { return showAllOps || o.home_shift === selShift || machineOf[o.id]; })
+        .sort(function (p, q) {
+          return (p.home_shift === selShift ? 0 : 1) - (q.home_shift === selShift ? 0 : 1) ||
+                 p.home_shift.localeCompare(q.home_shift) || effOf(q) - effOf(p);
+        });
+      document.getElementById('operator-grid').innerHTML = shown.map(function (o) {
+        var why = leaveReason(o, selDate);
+        var att = o.duty_date === selDate ? o.attendance : 'Not marked';
+        var m = machineOf[o.id];
+        var state, cls;
+        if (why) { state = '<span class="badge warn">' + why + '</span>'; cls = 'warn'; }
+        else if (att === 'Present') { state = '<span class="badge good">Present</span>'; cls = 'good'; }
+        else if (att === 'Absent') { state = '<span class="badge bad">Absent</span>'; cls = 'bad'; }
+        else if (att === 'Overtime') { state = '<span class="badge info">Overtime, Shift ' + o.duty_shift + '</span>'; cls = 'info'; }
+        else { state = '<span class="badge none">Not marked</span>'; cls = ''; }
+        var eff = Math.round(effOf(o) * 100);
+        return '<div class="tcard ' + cls + '"><div class="head">' + avatar(o.skill_group) +
+          '<div><h3>' + esc(o.name) + '</h3><span class="muted">Shift ' + o.home_shift + ' &middot; ' + esc(o.skill_group) + '</span></div></div>' +
+          '<div>' + state + '</div>' +
+          '<span class="muted">Efficiency ' + eff + '%</span><div class="meter"><i style="width:' + eff + '%"></i></div>' +
+          '<div class="foot">' + (m ? '<span class="badge info">' + esc(m.name) + '</span>' : '<span class="badge none">No machine</span>') + '</div></div>';
+      }).join('');
+
+      // ---- Free manpower and attention ----
       var kindBadge = { wait: '<span class="badge warn">Wait</span>', ask: '<span class="badge none">Ask engineer</span>', free: '<span class="badge good">Free for other work</span>' };
       document.getElementById('manpower').innerHTML = a.idleOperators.length ? a.idleOperators.map(function (x) {
         return '<div class="row"><div class="grow"><b>' + esc(x.operator.name) + '</b> <span class="muted">(' + esc(x.operator.skill_group) + ')</span><br>' +
           '<span class="muted">' + esc(x.advice) + '</span></div>' + kindBadge[x.kind] + '</div>';
       }).join('') : '<p class="muted">Every present operator has a machine.</p>';
 
-      var att = '';
-      if (a.idleHemms.length) att += '<h3>OK machines waiting for an operator</h3><p>' + a.idleHemms.map(function (h) { return esc(h.name); }).join(', ') + '</p>';
-      if (a.overtimeNotAllotted.length) att += '<h3>Overtime interest (not needed)</h3><p class="muted">Overtime costs extra. Overtime is used only when there are more machines than operators. These operators are not needed now.</p><p>' +
+      var att2 = '';
+      if (a.idleHemms.length) att2 += '<h3>OK machines waiting for an operator</h3><p>' + a.idleHemms.map(function (h) { return esc(h.name); }).join(', ') + '</p>';
+      if (a.overtimeNotAllotted.length) att2 += '<h3>Overtime interest (not needed)</h3><p class="muted">Overtime costs extra. Overtime is used only when there are more machines than operators. These operators are not needed now.</p><p>' +
         a.overtimeNotAllotted.map(function (o) { return esc(o.name) + ' (' + esc(o.skill_group) + ', home Shift ' + o.home_shift + ')'; }).join(', ') + '</p>';
-      if (a.comingBack.length) att += '<h3>Machines expected back during this shift</h3>' + a.comingBack.map(function (h) {
+      if (a.comingBack.length) att2 += '<h3>Machines expected back during this shift</h3>' + a.comingBack.map(function (h) {
         return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b></div><span class="badge warn">OK by ' + niceTime(h.expected_ok_at) + '</span></div>';
       }).join('');
-      if (a.notFit.length) att += '<h3>Machines not fit now</h3>' + a.notFit.map(function (h) {
+      if (a.notFit.length) att2 += '<h3>Machines not fit now</h3>' + a.notFit.map(function (h) {
         return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b><br><span class="muted">' + esc(h.location) + ' &middot; urgency ' + esc(h.urgency) +
           (h.expected_ok_at ? ' &middot; expected OK ' + niceTime(h.expected_ok_at) + ' (' + etaFromNow(h.expected_ok_at) + ')' : ' &middot; expected OK time not given') +
           (h.remarks ? ' &middot; ' + esc(h.remarks) : '') + '</span></div>' +
           '<span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span></div>';
       }).join('');
-      document.getElementById('attention').innerHTML = att || '<p>Nothing needs attention.</p>';
+      document.getElementById('attention').innerHTML = att2 || '<p>Nothing needs attention.</p>';
 
-      // Chart 1: HEMM condition by type (status colours)
-      var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
+      // ---- Chart: HEMM condition by type (status colours) ----
       var types = ['Excavator', 'Dumper', 'Motor Grader', 'Water Sprinkler'];
       var count = function (t, st) { return hemms.filter(function (h) { return h.hemm_type === t && h.status === st; }).length; };
       drawChart('hemm', 'chart-hemm', types, [
@@ -168,8 +269,7 @@
         return t + ': ' + count(t, 'Resolved') + ' OK, ' + count(t, 'In progress') + ' under repair, ' + count(t, 'Open') + ' breakdown';
       }).join('. ') + '.';
 
-      // Chart 2: operators per shift for the chosen date
-      var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
+      // ---- Chart: operators per shift for the chosen date ----
       var homeOps = function (s) { return ops.filter(function (o) { return o.home_shift === s; }); };
       var off = function (s) { return homeOps(s).filter(function (o) { return leaveReason(o, selDate); }).length; };
       var home = function (s, att) { return homeOps(s).filter(function (o) { return !leaveReason(o, selDate) && o.duty_date === selDate && o.attendance === att; }).length; };
@@ -186,50 +286,6 @@
         return 'Shift ' + s + ': ' + home(s, 'Present') + ' present, ' + ot(s) + ' overtime, ' + home(s, 'Absent') + ' absent, ' + off(s) + ' weekly off / leave, ' + notMarked(s) + ' not marked';
       }).join('. ') + '. Date: ' + niceDate(selDate) + '.';
     }
-    function drawProjection() {
-      var P = projectProduction(records, selDate, PROJECTION_DAYS);
-      var pct = P.fullTotal ? Math.round(100 * P.total / P.fullTotal) : 0;
-      document.getElementById('projection-tiles').innerHTML = '<div class="tiles">' +
-        tile(formatNum(P.total) + ' m³', 'Projected in ' + PROJECTION_DAYS + ' days') +
-        tile(formatNum(P.average) + ' m³', 'Average per day') +
-        tile(formatNum(P.fullTotal) + ' m³', 'Full strength (no breakdown, no leave)') +
-        tile(pct + '%', 'Projected vs full strength') + '</div>';
-      document.getElementById('proj-assumptions').innerHTML = [
-        'One dumper trip takes ' + TRIP_MINUTES + ' minutes and carries ' + M3_PER_TRIP + ' m³ of overburden.',
-        'A shift is ' + (SHIFT_MINUTES / 60) + ' hours, so one dumper makes ' + tripsPerShift() + ' trips = ' + formatNum(m3PerDumperShift()) + ' m³ per shift.',
-        'Dumpers haul only when an excavator with an operator is working. Grader and sprinklers do not add production.',
-        'Each machine has a breakdown chance per shift (set by the engineer). A machine under repair returns at its expected OK time (' + UNKNOWN_REPAIR_DAYS + ' days if not given).',
-        'Each operator has one weekly off, leave days marked in advance, and about ' + EXTRA_LEAVE_DAYS + ' more leave days a month.',
-        'Overtime is not counted. Operators work only their own shift.'
-      ].map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('');
-      drawLine('proj', 'chart-proj', P.days.map(function (d) { return niceDate(d.date).replace(/ \d{4}$/, ''); }), P.days.map(function (d) { return Math.round(d.total); }), Math.round(P.fullTotal / P.days.length));
-      var lo = P.days.reduce(function (m, d) { return d.total < m.total ? d : m; }, P.days[0]);
-      document.getElementById('proj-text').textContent = 'Lowest day: ' + niceDate(lo.date) + ' (' + formatNum(lo.total) + ' m³). Full strength is ' + formatNum(P.fullTotal / P.days.length) + ' m³ every day.';
-    }
-    function drawLine(key, canvasId, labels, values, fullPerDay) {
-      if (typeof Chart === 'undefined') { return; }
-      var ink = css('--ink2'), grid = css('--line'), surface = css('--surface');
-      if (charts[key]) charts[key].destroy();
-      charts[key] = new Chart(document.getElementById(canvasId), {
-        type: 'bar',
-        data: {
-          labels: labels,
-          datasets: [
-            { type: 'bar', label: 'Projected per day (m³)', data: values, backgroundColor: '#2a78d6', borderColor: surface, borderWidth: 2, borderRadius: 4 },
-            { type: 'line', label: 'Full strength per day', data: values.map(function () { return fullPerDay; }), borderColor: '#898781', borderDash: [6, 4], borderWidth: 2, pointRadius: 0 }
-          ]
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false, animation: false,
-          plugins: { legend: { position: 'bottom', labels: { color: ink, boxWidth: 14, font: { size: 13 } } } },
-          scales: {
-            x: { ticks: { color: ink, maxTicksLimit: 8 }, grid: { display: false } },
-            y: { beginAtZero: true, ticks: { color: ink }, grid: { color: grid } }
-          }
-        }
-      });
-    }
-    function tile(num, label) { return '<div class="tile"><div class="num">' + num + '</div><div class="lbl">' + label + '</div></div>'; }
 
     load();
     setInterval(load, 30000);

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b57d0">
   <title>My Work - HEMM Shift Allocator</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -44,6 +45,7 @@
       try {
         await updateRecord(id, fields);
         records = await loadRecords();
+        calToggled = {};
         render();
         showMessage(okText || 'Saved.', 'ok');
       } catch (err) {
@@ -62,22 +64,23 @@
 
     // ---------- Maintenance Engineer ----------
     function renderEngineer() {
-      document.getElementById('page-title').textContent = 'Maintenance Engineer: HEMM condition';
+      document.getElementById('page-title').textContent = 'Maintenance Engineer';
       var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
       var fit = hemms.filter(isFit).length;
-      var html = '<p>Tap a button to say if each machine is fit to work. <b>' + fit + ' of ' + hemms.length + '</b> are OK now.</p>';
+      var html = '<p class="muted">Tap a button to say if each machine is fit to work. <b>' + fit + ' of ' + hemms.length + '</b> are OK now.</p><div class="grid wide">';
       hemms.forEach(function (h) {
         var etaLine = '';
         if (h.status !== 'Resolved') {
+          var late = h.expected_ok_at && new Date(h.expected_ok_at) < new Date();
           etaLine = h.expected_ok_at
-            ? '<p class="' + (new Date(h.expected_ok_at) < new Date() ? 'muted' : '') + '"><b>Expected OK: ' + niceTime(h.expected_ok_at) + '</b> (' + etaFromNow(h.expected_ok_at) + ')' +
-              (new Date(h.expected_ok_at) < new Date() ? ' Please update.' : '') + '</p>'
+            ? '<p><b>Expected OK: ' + niceTime(h.expected_ok_at) + '</b> (' + etaFromNow(h.expected_ok_at) + ')' + (late ? ' Please update.' : '') + '</p>'
             : '<p class="muted">Expected OK time: not given yet.</p>';
         }
-        html += '<div class="card" data-id="' + esc(h.id) + '">' +
-          '<div class="row"><div class="grow"><h3>' + esc(h.name) + '</h3>' +
-          '<span class="muted">' + esc(h.make_model) + ' &middot; Sl. no. ' + esc(h.serial_no) + '</span></div>' +
-          '<span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span></div>' + etaLine +
+        html += '<div class="tcard ' + hemmStatusClass(h) + '" data-id="' + esc(h.id) + '">' +
+          '<div class="head">' + avatar(h.hemm_type) + '<div><h3>' + esc(h.name) + '</h3>' +
+          '<span class="muted">' + esc(h.make_model) + ' &middot; Sl. no. ' + esc(h.serial_no) + '</span></div></div>' +
+          '<div><span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span> ' +
+          '<span class="badge none">Breakdown chance ' + breakdownProbOf(h) + '%</span></div>' + etaLine +
           '<label>Expected to be OK in (approx.)</label>' +
           '<select data-f="eta"><option value="keep">Keep as it is</option><option value="none">Not known</option>' +
           ETA_HOURS.map(function (n) { return '<option value="' + n + '">' + (n === 1 ? '1 hour' : n + ' hours') + '</option>'; }).join('') + '</select>' +
@@ -96,7 +99,7 @@
           '<label>Remarks (optional)</label><input type="text" data-f="remarks" maxlength="200" value="' + esc(h.remarks || '') + '" placeholder="e.g. hydraulic hose leak">' +
           '<button class="btn secondary" data-act="details">Save time, location, urgency, breakdown chance and remarks</button></div>';
       });
-      document.getElementById('content').innerHTML = html;
+      document.getElementById('content').innerHTML = html + '</div>';
     }
     function breakdownChoices(h) {
       var cur = breakdownProbOf(h);
@@ -120,8 +123,11 @@
 
     // ---------- Operator ----------
     var opDate = null;
+    var calMonth = null;      // {y, m} month shown in the leave calendar
+    var calToggled = {};      // days tapped in the calendar but not saved yet
+
     function renderOperator() {
-      document.getElementById('page-title').textContent = 'Operator: my duty';
+      document.getElementById('page-title').textContent = 'Operator';
       var me = byId(getOperatorId());
       if (!me || me.record_type !== 'OPERATOR') {
         document.getElementById('content').innerHTML =
@@ -155,9 +161,11 @@
         attendance === 'Off' ? '<span class="badge warn">' + reason + ': not on duty</span>' :
         '<span class="badge none">Not marked</span>';
 
+      var eff = Math.round(effOf(me) * 100);
       document.getElementById('content').innerHTML =
-        '<div class="card"><h3>' + esc(me.name) + '</h3>' +
-        '<p class="muted">Home shift ' + me.home_shift + ' (' + SHIFT_TIMES[me.home_shift] + ') &middot; ' + esc(me.skill_group) + ' operator</p></div>' +
+        '<div class="card"><div class="head" style="display:flex;gap:12px;align-items:center">' + avatar(me.skill_group) +
+        '<div><h3>' + esc(me.name) + '</h3><span class="muted">Shift ' + me.home_shift + ' (' + SHIFT_TIMES[me.home_shift] + ') &middot; ' + esc(me.skill_group) + ' operator</span></div></div>' +
+        '<p class="muted" style="margin-top:10px">Efficiency ' + eff + '%</p><div class="meter"><i style="width:' + eff + '%"></i></div></div>' +
         '<label for="op-date">Duty date</label><input type="date" id="op-date" value="' + opDate + '">' +
         '<div class="card"><p>Your answer for ' + niceDate(opDate) + ': ' + badge + '</p>' + machineText + '</div>' +
         '<h2>My own shift (Shift ' + me.home_shift + ')</h2>' +
@@ -175,19 +183,53 @@
         (attendance === 'Overtime' ? '<button class="btn secondary" data-act="clear">Withdraw my overtime interest</button>' : '') +
         leaveSection(me);
     }
+
+    // ---------- Leave calendar ----------
     function leaveSection(me) {
-      var today = dateToStr(new Date());
-      var upcoming = (me.leave_dates || []).filter(function (d) { return d >= today; }).sort();
-      return '<h2>Weekly off and leave</h2><div class="card">' +
+      var now = new Date();
+      if (!calMonth) calMonth = { y: now.getFullYear(), m: now.getMonth() };
+      var today = dateToStr(now);
+      var marked = me.leave_dates || [];
+      var first = new Date(calMonth.y, calMonth.m, 1);
+      var count = new Date(calMonth.y, calMonth.m + 1, 0).getDate();
+      var monthName = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][calMonth.m];
+
+      var cells = '';
+      ['S', 'M', 'T', 'W', 'T', 'F', 'S'].forEach(function (d) { cells += '<div class="cal-dow">' + d + '</div>'; });
+      for (var i = 0; i < first.getDay(); i++) cells += '<div class="cal-day empty"></div>';
+      for (var d = 1; d <= count; d++) {
+        var ds = calMonth.y + '-' + pad2(calMonth.m + 1) + '-' + pad2(d);
+        var isMarked = marked.indexOf(ds) >= 0, toggled = !!calToggled[ds];
+        var cls = 'cal-day', dis = '';
+        if (ds < today) { cls += ' past'; dis = ' disabled'; }
+        else if (me.weekly_off != null && weekdayOf(ds) === Number(me.weekly_off)) { cls += ' off'; dis = ' disabled'; }
+        else if (isMarked && toggled) cls += ' remove';
+        else if (isMarked) cls += ' leave';
+        else if (toggled) cls += ' add';
+        if (ds === today) cls += ' today';
+        cells += '<button class="' + cls + '"' + dis + ' data-act="calday" data-val="' + ds + '">' + d + '</button>';
+      }
+
+      var changes = Object.keys(calToggled).length;
+      var final = marked.filter(function (x) { return x >= today && !calToggled[x]; })
+        .concat(Object.keys(calToggled).filter(function (x) { return marked.indexOf(x) < 0; }));
+      var upcoming = marked.filter(function (x) { return x >= today; }).sort();
+      var perMonth = final.filter(function (x) { return x.slice(0, 7) === calMonth.y + '-' + pad2(calMonth.m + 1); }).length;
+
+      return '<h2>' + icon('event') + ' Weekly off and leave</h2><div class="card">' +
         '<p>Your weekly off day: <b>' + (me.weekly_off == null ? 'not set' : DAY_NAMES[me.weekly_off]) + '</b></p>' +
-        '<p class="muted">About ' + EXTRA_LEAVE_DAYS + ' more leave days a month are expected, besides the weekly off. Marking a day here in advance helps the tool plan.</p>' +
-        '<label for="lv-date">A day you will NOT be present</label><input type="date" id="lv-date" min="' + today + '">' +
-        '<button class="btn warn" data-act="addleave">Add leave day</button>' +
-        '<h3>My marked leave days</h3>' +
-        (upcoming.length ? upcoming.map(function (d) {
-          return '<div class="row"><div class="grow"><b>' + niceDate(d) + '</b> <span class="muted">' + DAY_NAMES[weekdayOf(d)] + '</span></div>' +
-            '<button class="btn secondary" style="width:auto;margin:0" data-act="rmleave" data-val="' + d + '">Remove</button></div>';
-        }).join('') : '<p class="muted">No leave days marked.</p>') + '</div>';
+        '<p class="muted">About ' + EXTRA_LEAVE_DAYS + ' more leave days a month are usual. You can apply for more. Tap the days you will NOT be present, then press Save.</p>' +
+        '<div class="cal-head"><button class="cal-nav" data-act="calprev" aria-label="Previous month">&lsaquo;</button><b>' + monthName + ' ' + calMonth.y + '</b>' +
+        '<button class="cal-nav" data-act="calnext" aria-label="Next month">&rsaquo;</button></div>' +
+        '<div class="cal-grid">' + cells + '</div>' +
+        '<div class="key"><span><i style="background:var(--warn-c)"></i>Leave</span><span><i style="background:var(--primary)"></i>New leave</span>' +
+        '<span><i style="border:2px dashed var(--bad)"></i>To remove</span><span><i style="background:var(--surface-2)"></i>Weekly off</span></div>' +
+        '<p class="muted">Leave days in ' + monthName + ' after saving: <b>' + perMonth + '</b>' + (perMonth > EXTRA_LEAVE_DAYS ? ' (more than the usual ' + EXTRA_LEAVE_DAYS + ')' : '') + '</p>' +
+        '<div class="btn-row"><button class="btn"' + (changes ? '' : ' disabled') + ' data-act="calsave">Save leave changes' + (changes ? ' (' + changes + ')' : '') + '</button>' +
+        '<button class="btn secondary"' + (changes ? '' : ' disabled') + ' data-act="calclear">Clear selection</button></div>' +
+        '<h3 style="margin-top:12px">My marked leave days</h3>' +
+        (upcoming.length ? '<p>' + upcoming.map(function (x) { return '<span class="badge warn">' + niceDate(x).replace(/ \d{4}$/, '') + '</span>'; }).join(' ') + '</p>'
+                         : '<p class="muted">No leave days marked.</p>') + '</div>';
     }
     function opFields(att, shift, date) {
       return { attendance: att, duty_date: date, duty_shift: shift, status: att === 'Overtime' ? 'In progress' : 'Resolved' };
@@ -201,20 +243,23 @@
       if (!inDate) { inDate = info.date; inShift = info.shift; }
       var ops = records.filter(function (r) { return r.record_type === 'OPERATOR' && r.home_shift === inShift; })
         .sort(function (a, b) { return a.name.localeCompare(b.name); });
-      var html = '<p>Use this if an operator phones in. You can mark their attendance for them. Overtime is raised by the operator.</p>' +
+      var html = '<p class="muted">Use this if an operator phones in. You can mark their attendance for them. Overtime is raised by the operator.</p>' +
         '<label for="in-date">Date</label><input type="date" id="in-date" value="' + inDate + '">' +
-        '<div class="btn-row" style="margin-top:8px">' + SHIFTS.map(function (s) {
-          return '<button class="btn secondary' + (s === inShift ? ' on' : '') + '" data-act="shift" data-val="' + s + '">Shift ' + s + '</button>'; }).join('') + '</div>' +
-        '<a class="btn" href="dashboard.html">Open the dashboard</a>' +
-        '<h2>Shift ' + inShift + ' operators</h2><div class="card">';
+        '<div class="seg">' + SHIFTS.map(function (s) {
+          return '<button class="' + (s === inShift ? 'on' : '') + '" data-act="shift" data-val="' + s + '">Shift ' + s + '<small>' + SHIFT_TIMES[s] + '</small></button>'; }).join('') + '</div>' +
+        '<a class="btn secondary" href="dashboard.html">' + icon('dashboard') + ' Open the dashboard</a>' +
+        '<h2>Shift ' + inShift + ' operators</h2><div class="grid wide">';
       ops.forEach(function (o) {
         var att = o.duty_date === inDate ? o.attendance : 'Not marked';
         var why = leaveReason(o, inDate);
-        html += '<div class="row" data-id="' + esc(o.id) + '"><div class="grow"><b>' + esc(o.name) + '</b><br><span class="muted">' + esc(o.skill_group) + '</span></div>' +
-          (why ? '<span class="badge warn">' + why + '</span>'
-               : '<span class="badge ' + (att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : att === 'Overtime' ? 'info' : 'none') + '">' + att + '</span>' +
-                 '<div class="btn-row" style="width:100%"><button class="btn good' + (att === 'Present' ? ' on' : '') + '" data-act="present">Present</button>' +
-                 '<button class="btn bad' + (att === 'Absent' ? ' on' : '') + '" data-act="absent">Absent</button></div>') + '</div>';
+        var upcoming = (o.leave_dates || []).filter(function (x) { return x >= dateToStr(new Date()); }).length;
+        html += '<div class="tcard ' + (why ? 'warn' : att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : 'info') + '" data-id="' + esc(o.id) + '">' +
+          '<div class="head">' + avatar(o.skill_group) + '<div><h3>' + esc(o.name) + '</h3><span class="muted">' + esc(o.skill_group) + ' &middot; efficiency ' + Math.round(effOf(o) * 100) + '%</span></div></div>' +
+          '<div>' + (why ? '<span class="badge warn">' + why + '</span>'
+                          : '<span class="badge ' + (att === 'Present' ? 'good' : att === 'Absent' ? 'bad' : att === 'Overtime' ? 'info' : 'none') + '">' + att + '</span>') +
+          ' <span class="badge none">' + upcoming + ' leave days ahead</span></div>' +
+          (why ? '' : '<div class="btn-row"><button class="btn good' + (att === 'Present' ? ' on' : '') + '" data-act="present">Present</button>' +
+                      '<button class="btn bad' + (att === 'Absent' ? ' on' : '') + '" data-act="absent">Absent</button></div>') + '</div>';
       });
       html += '</div>';
       var ot = records.filter(function (r) { return r.record_type === 'OPERATOR' && r.attendance === 'Overtime' && r.duty_date === inDate && r.duty_shift === inShift; });
@@ -227,7 +272,7 @@
     // ---------- One click handler for the whole page ----------
     document.getElementById('content').addEventListener('click', function (e) {
       var btn = e.target.closest('button[data-act]');
-      if (!btn) return;
+      if (!btn || btn.disabled) return;
       var act = btn.getAttribute('data-act');
       clearMessage();
       var card = btn.closest('[data-id]');
@@ -245,20 +290,26 @@
         if (act === 'present') save(me.id, opFields('Present', me.home_shift, opDate), 'Saved: you will be PRESENT on ' + niceDate(opDate) + '.');
         if (act === 'absent') save(me.id, opFields('Absent', me.home_shift, opDate), 'Saved: you will be ABSENT on ' + niceDate(opDate) + '.');
         if (act === 'overtime') save(me.id, opFields('Overtime', document.getElementById('ot-shift').value, opDate), 'Saved: your overtime interest is noted.');
-        if (act === 'addleave') {
-          var lv = document.getElementById('lv-date').value;
-          var todayStr = dateToStr(new Date());
-          if (!lv) { showMessage('Please choose a day first.', 'info'); return; }
-          if (lv < todayStr) { showMessage('Please choose today or a day in the future.', 'info'); return; }
-          var list = (me.leave_dates || []).filter(function (d) { return d >= todayStr && d !== lv; });
-          list.push(lv); list.sort();
-          save(me.id, { leave_dates: list }, 'Leave day added: ' + niceDate(lv) + '.');
-        }
-        if (act === 'rmleave') {
-          var gone = btn.getAttribute('data-val');
-          save(me.id, { leave_dates: (me.leave_dates || []).filter(function (d) { return d !== gone; }) }, 'Leave day removed.');
-        }
         if (act === 'clear') save(me.id, { attendance: 'Not marked', duty_date: null, duty_shift: null, status: 'Open' }, 'Your overtime interest is withdrawn.');
+        if (act === 'calprev' || act === 'calnext') {
+          calMonth.m += act === 'calnext' ? 1 : -1;
+          if (calMonth.m > 11) { calMonth.m = 0; calMonth.y++; }
+          if (calMonth.m < 0) { calMonth.m = 11; calMonth.y--; }
+          renderOperator();
+        }
+        if (act === 'calday') {
+          var day = btn.getAttribute('data-val');
+          if (calToggled[day]) delete calToggled[day]; else calToggled[day] = true;
+          renderOperator();
+        }
+        if (act === 'calclear') { calToggled = {}; renderOperator(); }
+        if (act === 'calsave') {
+          var todayStr = dateToStr(new Date());
+          var oldList = me.leave_dates || [];
+          var list = oldList.filter(function (x) { return x >= todayStr && !calToggled[x]; })
+            .concat(Object.keys(calToggled).filter(function (x) { return oldList.indexOf(x) < 0 && x >= todayStr; })).sort();
+          save(me.id, { leave_dates: list }, 'Leave saved. You have ' + list.length + ' leave day(s) marked ahead.');
+        }
       } else if (role === 'incharge') {
         if (act === 'shift') { inShift = btn.getAttribute('data-val'); renderIncharge(); }
         else if (card) {
