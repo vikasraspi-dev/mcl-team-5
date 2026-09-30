@@ -26,7 +26,7 @@
     var busy = false;
 
     if (!ROLE_NAMES[role]) {
-      window.location.href = 'index.html';
+      window.location.href = 'login.html';
     }
 
     // ---------- Loading and saving ----------
@@ -58,6 +58,7 @@
     document.getElementById('refresh').onclick = function () { clearMessage(); refresh(); };
 
     function render() {
+      renderSidebar(records);
       if (role === 'engineer') renderEngineer();
       else if (role === 'operator') renderOperator();
       else renderIncharge();
@@ -255,7 +256,7 @@
           return '<button class="' + (s === inShift ? 'on' : '') + '" data-act="shift" data-val="' + s + '">Shift ' + s + '<small>' + SHIFT_TIMES[s] + '</small></button>'; }).join('') + '</div>' +
         '<div class="card"><b>Shift ' + inShift + ', ' + niceDate(inDate) + ':</b> ' + alloc.assignments.length + ' machines running, planned ' + formatNum(alloc.plannedM3) + ' m³.' +
         (needText ? ' <span class="badge warn wrap">Empty machines need ' + esc(needText) + '</span>' : ' <span class="badge good">Every OK machine has an operator</span>') +
-        ' <a href="dashboard.html">Open the dashboard</a></div>' +
+        ' <a href="index.html">Open the dashboard</a></div>' +
         '<h2>Shift ' + inShift + ' operators</h2><div class="grid">';
       mine.forEach(function (o) {
         var why = leaveReason(o, inDate);
@@ -335,7 +336,7 @@
             .concat(Object.keys(calToggled).filter(function (x) { return oldList.indexOf(x) < 0 && x >= todayStr; })).sort();
           save(me.id, { leave_dates: list }, 'Leave saved. You have ' + list.length + ' leave day(s) marked ahead.');
         }
-      } else if (role === 'incharge') {
+      } else if (role === 'manager') {
         if (act === 'shift') { inShift = btn.getAttribute('data-val'); renderIncharge(); return; }
         var op = card ? byId(card.getAttribute('data-id')) : null;
         if (!op) return;
@@ -351,7 +352,13 @@
     });
     window.onThemeChange = function () {};
 
-    refresh();
+    // The manager and the engineer must really be logged in. Operators only chose their name.
+    if (ROLE_NAMES[role]) {
+      checkLogin(role).then(function (ok) {
+        if (!ok) { window.location.href = 'login.html'; return; }
+        refresh();
+      });
+    }
   </script>
 </body>
 </html>

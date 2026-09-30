@@ -23,7 +23,7 @@ try {
 var TABLE = 'dispatch_records';
 var SHIFTS = ['A', 'B', 'C'];
 var SHIFT_TIMES = { A: '6 AM - 2 PM', B: '2 PM - 10 PM', C: '10 PM - 6 AM' };
-var ROLE_NAMES = { incharge: 'Mine Manager', engineer: 'Maintenance Engineer', operator: 'Operator' };
+var ROLE_NAMES = { manager: 'Mine Manager', engineer: 'Maintenance Engineer', operator: 'Operator' };
 var LOCATIONS = ['Parking yard', 'Workshop', 'Pit', 'Haul road', 'Dump yard'];
 // "About how long until the machine is OK?" choices for the engineer (hours).
 var ETA_HOURS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72];
@@ -91,7 +91,37 @@ function niceDate(str) {
 // ---- Remembering the chosen role on this phone (no password) ----
 function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* ignore */ } }
 function recall(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
-function getRole() { return recall('hemm_role'); }
+function forget(key) { try { localStorage.removeItem(key); } catch (e) { /* ignore */ } }
+function getRole() {
+  var r = recall('hemm_role');
+  return r === 'incharge' ? 'manager' : r;     // old name of the Mine Manager role
+}
+
+// ---- Login (Supabase Auth). Manager and engineer log in with email + password. ----
+// The role of a login is kept by the Data Keeper in the account itself (see database/06-set-login-roles.sql).
+async function getAuthUser() {
+  if (!db) return null;
+  try {
+    var res = await db.auth.getSession();
+    return (res.data && res.data.session && res.data.session.user) || null;
+  } catch (e) { return null; }
+}
+function authRoleOf(user) {
+  return (user && user.app_metadata && user.app_metadata.role) || null;
+}
+// Returns true if the person is really logged in with the role they chose. Otherwise clears the role.
+async function checkLogin(role) {
+  if (role !== 'manager' && role !== 'engineer') return true;    // operators and viewers need no login
+  var user = await getAuthUser();
+  if (user && authRoleOf(user) === role) return true;
+  forget('hemm_role');
+  return false;
+}
+async function signOutNow() {
+  try { if (db) await db.auth.signOut(); } catch (e) { /* ignore */ }
+  forget('hemm_role');
+  window.location.href = 'index.html';
+}
 function getOperatorId() { return recall('hemm_operator_id'); }
 
 // ---- Icons (small pictures drawn inside the page, no downloads) ----
@@ -104,6 +134,12 @@ var ICONS = {
   chart: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z',
   event: 'M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2zm-8 4H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z',
   check: 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
+  menu: 'M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z',
+  close: 'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+  logout: 'M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z',
+  login: 'M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z',
+  search: 'M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
+  lock: 'M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z',
   sun: 'M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM11 1h2v3h-2zM11 20h2v3h-2zM1 11h3v2H1zM20 11h3v2h-3zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4zM16.3 17.7l1.4-1.4 2.1 2.1-1.4 1.4zM17.7 4.2l1.4 1.4-2.1 2.1-1.4-1.4zM5.6 19.8l-1.4-1.4 2.1-2.1 1.4 1.4z',
   moon: 'M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26 5.4 5.4 0 0 1-5.4-5.4c0-1.81.89-3.42 2.26-4.4A9.2 9.2 0 0 0 12 3z',
   truck: 'M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z'
@@ -119,7 +155,7 @@ function avatar(kind) {
   return '<span class="avatar ' + m[0] + '">' + m[1] + '</span>';
 }
 
-// ---- App bar and navigation, the same on every page ----
+// ---- App shell, the same on every page: top bar, side bar (machines and operators), bottom menu on phones ----
 // The Mahanadi Coalfields logo: put the official logo file in the top folder and name it logo.png.
 // Until that file exists, a plain "MCL" badge is shown instead.
 function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'light'; }
@@ -130,25 +166,100 @@ function setTheme(t) {
   if (btn) btn.innerHTML = icon(t === 'dark' ? 'sun' : 'moon');
   if (typeof window.onThemeChange === 'function') window.onThemeChange();
 }
+function logoHtml() { return '<span class="logo"><img src="logo.png" alt="Mahanadi Coalfields Limited"></span>'; }
+function fixLogos(root) {
+  Array.prototype.forEach.call(root.querySelectorAll('.logo img'), function (img) {
+    img.onerror = function () { img.parentNode.innerHTML = '<span class="logo-fallback">MCL</span>'; };
+  });
+}
+var PAGE_TITLES = { 'index.html': 'Dashboard', 'work.html': 'My Work', 'login.html': 'Login' };
 function renderHeader(activePage) {
   var el = document.getElementById('site-header');
   if (!el) return;
   var role = getRole();
-  var who = ROLE_NAMES[role] || 'Choose role';
-  var links = [['index.html', 'Home', 'home'], ['work.html', 'My Work', 'work'], ['dashboard.html', 'Dashboard', 'dashboard']];
+  var who = ROLE_NAMES[role] || 'Not logged in';
+  var links = [['index.html', 'Dashboard', 'dashboard'], ['work.html', 'My Work', 'work'], ['login.html', 'Login', 'lock']];
   var nav = links.map(function (l) {
     return '<a href="' + l[0] + '"' + (l[0] === activePage ? ' class="active"' : '') + '><span class="pill">' + icon(l[2]) + '</span><span>' + l[1] + '</span></a>';
   }).join('');
+  document.body.classList.add('has-sidebar');
   el.className = 'site-header';
   el.innerHTML =
-    '<div class="appbar-top"><div class="brand"><span class="logo"><img src="logo.png" alt="Mahanadi Coalfields Limited"></span>' +
-    '<div><div class="title">HEMM Allocator</div><div class="subtitle">Mahanadi Coalfields Limited &middot; Team 5</div></div></div>' +
-    '<a class="role-chip" href="index.html">' + icon('person') + esc(who) + '</a>' +
+    '<div class="appbar-top"><button class="icon-btn menu-btn" id="menu-btn" aria-label="Open the menu with machines and operators">' + icon('menu') + '</button>' +
+    logoHtml() + '<div class="page-title">' + esc(PAGE_TITLES[activePage] || 'HEMM Allocator') + '</div>' +
+    '<a class="role-chip" href="login.html">' + icon('person') + esc(who) + '</a>' +
     '<button class="icon-btn" id="theme-toggle" aria-label="Switch dark or light theme">' + icon(currentTheme() === 'dark' ? 'sun' : 'moon') + '</button></div>' +
     '<nav class="nav">' + nav + '</nav>';
-  var img = el.querySelector('.logo img');
-  img.onerror = function () { img.parentNode.innerHTML = '<span class="logo-fallback">MCL</span>'; };
+
+  // Side bar
+  var old = document.getElementById('sidebar');
+  if (old) old.parentNode.removeChild(old);
+  var oldScrim = document.getElementById('scrim');
+  if (oldScrim) oldScrim.parentNode.removeChild(oldScrim);
+  var side = document.createElement('aside');
+  side.id = 'sidebar'; side.className = 'sidebar';
+  var sideNav = links.map(function (l) {
+    return '<a class="sb-link' + (l[0] === activePage ? ' active' : '') + '" href="' + l[0] + '">' + icon(l[2]) + '<span>' + l[1] + '</span></a>';
+  }).join('') + (ROLE_NAMES[role] && role !== 'operator' ? '<button class="sb-link" id="sb-logout">' + icon('logout') + '<span>Log out</span></button>' : '');
+  side.innerHTML =
+    '<div class="sb-brand">' + logoHtml() + '<div><div class="title">HEMM Allocator</div><div class="subtitle">Mahanadi Coalfields Limited</div></div>' +
+    '<button class="icon-btn sb-close" id="sb-close" aria-label="Close the menu">' + icon('close') + '</button></div>' +
+    '<div class="sb-nav">' + sideNav + '</div>' +
+    '<div class="sb-search">' + icon('search', true) + '<input type="text" id="sb-filter" placeholder="Find a machine or operator" aria-label="Find a machine or operator"></div>' +
+    '<div class="sb-scroll"><div class="sb-title">Machines</div><div id="sb-machines"><p class="muted" style="padding:0 14px">Loading...</p></div>' +
+    '<div class="sb-title">Operators</div><div id="sb-operators"></div></div>' +
+    '<div class="sb-foot">All data is made up.</div>';
+  document.body.appendChild(side);
+  var scrim = document.createElement('div');
+  scrim.id = 'scrim'; scrim.className = 'scrim';
+  document.body.appendChild(scrim);
+  fixLogos(el); fixLogos(side);
+
   document.getElementById('theme-toggle').onclick = function () { setTheme(currentTheme() === 'dark' ? 'light' : 'dark'); };
+  var closeDrawer = function () { document.body.classList.remove('drawer-open'); };
+  document.getElementById('menu-btn').onclick = function () { document.body.classList.add('drawer-open'); };
+  document.getElementById('sb-close').onclick = closeDrawer;
+  scrim.onclick = closeDrawer;
+  var lo = document.getElementById('sb-logout');
+  if (lo) lo.onclick = signOutNow;
+  document.getElementById('sb-filter').oninput = function () {
+    var q = this.value.trim().toLowerCase();
+    Array.prototype.forEach.call(side.querySelectorAll('.sb-item'), function (b) {
+      b.style.display = !q || b.getAttribute('data-name').indexOf(q) >= 0 ? '' : 'none';
+    });
+  };
+  side.addEventListener('click', function (e) {
+    var b = e.target.closest('.sb-item');
+    if (!b) return;
+    closeDrawer();
+    var kind = b.getAttribute('data-kind'), id = b.getAttribute('data-id');
+    if (typeof window.onSidebarPick === 'function') window.onSidebarPick(kind, id);
+    else window.location.href = 'index.html?open=' + kind + ':' + encodeURIComponent(id);
+  });
+}
+// Fill the side bar lists. Dots show today's picture: green = OK / on duty, yellow = repair / off, red = breakdown.
+function renderSidebar(records) {
+  var m = document.getElementById('sb-machines'), o = document.getElementById('sb-operators');
+  if (!m || !o) return;
+  var today = currentShiftInfo().date;
+  var order = { 'Excavator': 0, 'Dumper': 1, 'Water Sprinkler': 2, 'Motor Grader': 3 };
+  var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; }).sort(function (a, b) {
+    return order[a.hemm_type] - order[b.hemm_type] || String(a.serial_no).localeCompare(String(b.serial_no), undefined, { numeric: true });
+  });
+  m.innerHTML = hemms.map(function (h) {
+    return '<button class="sb-item" data-kind="hemm" data-id="' + esc(h.id) + '" data-name="' + esc(h.name.toLowerCase()) + '">' +
+      '<span class="dot ' + hemmStatusClass(h) + '"></span><span class="sb-name">' + esc(h.name) + '</span><span class="sb-sub">' + breakdownProbOf(h) + '%</span></button>';
+  }).join('') || '<p class="muted" style="padding:0 14px">No machines.</p>';
+  var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
+  o.innerHTML = SHIFTS.map(function (sh) {
+    var list = ops.filter(function (x) { return x.home_shift === sh; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+    if (!list.length) return '';
+    return '<div class="sb-sub-title">Shift ' + sh + '</div>' + list.map(function (x) {
+      var why = leaveReason(x, today);
+      return '<button class="sb-item" data-kind="op" data-id="' + esc(x.id) + '" data-name="' + esc(x.name.toLowerCase()) + '">' +
+        '<span class="dot ' + (why ? 'warn' : 'good') + '"></span><span class="sb-name">' + esc(x.name) + '</span><span class="sb-sub">' + Math.round(effOf(x) * 100) + '%</span></button>';
+    }).join('');
+  }).join('');
 }
 
 // ---- Friendly messages (errors always show the real error text) ----
@@ -497,4 +608,60 @@ function changeMessage(before, after) {
           ' m³ (' + (diff > 0 ? '+' : '-') + (before ? (Math.abs(diff) / before * 100).toFixed(1) : '0') + '%): from ' + formatNum(before) + ' to ' + formatNum(after) + ' m³.',
     kind: diff > 0 ? 'ok' : 'warn'
   };
+}
+
+// ---- What-if: try a different number of machines and operators ----
+// counts = { exM, duM, exO, duO }: excavators, dumpers, excavator operators per shift, dumper operators per shift.
+// Returns the current counts (used as slider starting points).
+function fleetCounts(records) {
+  var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
+  var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
+  var perShift = function (group) {
+    return Math.max.apply(null, [0].concat(SHIFTS.map(function (s) {
+      return ops.filter(function (o) { return o.home_shift === s && o.skill_group === group; }).length;
+    })));
+  };
+  return {
+    exM: hemms.filter(function (h) { return h.hemm_type === 'Excavator'; }).length,
+    duM: hemms.filter(function (h) { return h.hemm_type === 'Dumper'; }).length,
+    exO: perShift('Excavator'), duO: perShift('Dumper')
+  };
+}
+// A copy of the records with machines and operators added (average ones) or removed (weakest ones first).
+function applyWhatIf(records, want) {
+  var out = records.slice();
+  var avg = function (list, f, fallback) {
+    return list.length ? list.reduce(function (a, x) { return a + f(x); }, 0) / list.length : fallback;
+  };
+  [['Excavator', want.exM], ['Dumper', want.duM]].forEach(function (pair) {
+    var type = pair[0], target = pair[1];
+    var list = out.filter(function (h) { return h.record_type === 'HEMM' && h.hemm_type === type; });
+    if (target < list.length) {
+      var drop = list.slice().sort(function (a, b) { return breakdownProbOf(b) - breakdownProbOf(a); }).slice(0, list.length - target);
+      out = out.filter(function (r) { return drop.indexOf(r) < 0; });
+    } else {
+      for (var i = list.length; i < target; i++) {
+        out.push({ id: 'whatif-m-' + type + i, record_type: 'HEMM', name: 'Extra ' + type + ' ' + (i + 1), skill_group: type === 'Excavator' ? 'Excavator' : 'Dumper',
+          hemm_type: type, serial_no: 'x' + i, status: 'Resolved', expected_ok_at: null, location: 'Parking yard',
+          breakdown_prob: avg(list, breakdownProbOf, DEFAULT_BREAKDOWN_PROB) });
+      }
+    }
+  });
+  SHIFTS.forEach(function (sh, si) {
+    [['Excavator', want.exO], ['Dumper', want.duO]].forEach(function (pair) {
+      var group = pair[0], target = pair[1];
+      var list = out.filter(function (o) { return o.record_type === 'OPERATOR' && o.home_shift === sh && o.skill_group === group; });
+      if (target < list.length) {
+        var drop = list.slice().sort(function (a, b) { return effOf(a) - effOf(b); }).slice(0, list.length - target);
+        out = out.filter(function (r) { return drop.indexOf(r) < 0; });
+      } else {
+        for (var i = list.length; i < target; i++) {
+          out.push({ id: 'whatif-o-' + sh + group + i, record_type: 'OPERATOR', name: 'Extra ' + group + ' operator ' + sh + (i + 1), skill_group: group,
+            home_shift: sh, efficiency: Math.round(avg(list, effOf, DEFAULT_EFFICIENCY / 100) * 100), weekly_off: (i + si) % 7,
+            leave_dates: [], absent_dates: [], ot_calls: {} });
+        }
+      }
+    });
+  });
+  return out;
 }
