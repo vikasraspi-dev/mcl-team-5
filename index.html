@@ -33,6 +33,20 @@
 
     <div class="insights" id="insights"></div>
 
+    <section id="decisions-wrap" style="margin-top:12px">
+      <div class="card-head"><h2 style="margin:0">Decisions needed <span class="badge warn" id="dec-count"></span></h2></div>
+      <p class="muted">When a machine breaks down or an operator takes a sudden leave, these cards show what it costs and what you can do. The number of machines is fixed, so the choices are: ask the engineer to fix it faster, ask the crews to shorten the trip time, or call overtime.</p>
+      <div class="dgrid" id="decisions"></div>
+      <details class="help" id="sim-box">
+        <summary>Try a scenario (nothing is saved)</summary>
+        <div class="sim-row">
+          <div><label for="sim-hemm">A machine breaks down</label><select id="sim-hemm"></select></div>
+          <div><label for="sim-op">An operator takes sudden leave today</label><select id="sim-op"></select></div>
+          <button class="btn secondary small" id="sim-clear" style="margin:0">Clear scenario</button>
+        </div>
+      </details>
+    </section>
+
     <div class="kpis" id="kpis" style="margin-top:12px">
       <div class="kpi k1 skel"></div><div class="kpi k2 skel"></div><div class="kpi k3 skel"></div><div class="kpi k4 skel"></div><div class="kpi k5 skel"></div>
     </div>
@@ -269,6 +283,188 @@
         chip('truck', '<b>Riskiest machine:</b> ' + (risky ? esc(risky.name) + ' (' + breakdownProbOf(risky) + '% per shift)' : '-'), offDays + ' operator-days of weekly off / leave in the next 7 days.');
     }
 
+
+    // ---------- Decision cards ----------
+    var sim = { hemmId: '', opId: '' };   // a pretend breakdown / sudden leave (screen only)
+    var simKey = '';
+    var copyTexts = [];
+    function applySim(recs) {
+      if (!sim.hemmId && !sim.opId) return recs;
+      return recs.map(function (r) {
+        if (sim.hemmId && r.id === sim.hemmId) return Object.assign({}, r, { status: 'Open', expected_ok_at: null });
+        if (sim.opId && r.id === sim.opId) return Object.assign({}, r, { absent_dates: (r.absent_dates || []).filter(function (x) { return x !== todayStr; }).concat([todayStr]) });
+        return r;
+      });
+    }
+    function replaceRec(recs, target, changes) {
+      return recs.map(function (r) { return r === target ? Object.assign({}, r, changes) : r; });
+    }
+    function sevOf(loss, ideal) {
+      var pc = ideal > 0 ? loss / ideal * 100 : 0;
+      return pc >= 8 ? 'high' : (pc >= 2 ? 'medium' : (pc >= 0.2 ? 'low' : 'none'));
+    }
+    var SEV_TEXT = { high: 'High impact', medium: 'Medium impact', low: 'Low impact', none: 'No loss' };
+    var SEV_BADGE = { high: 'bad', medium: 'warn', low: 'none', none: 'good' };
+    function chip(label, sub, gain, rec) {
+      return '<div class="opt' + (rec ? ' rec' : '') + (gain < 1 ? ' zero' : '') + '"><b>' + esc(label) + '</b>' +
+        (gain >= 1 ? '+' + formatNum(gain) + ' m³' : 'no gain') + (sub ? '<br><span class="muted">' + esc(sub) + '</span>' : '') + '</div>';
+    }
+    function copyBtn(text) {
+      copyTexts.push(text);
+      return '<button class="btn secondary tiny" data-copy="' + (copyTexts.length - 1) + '">Copy request</button>';
+    }
+    function cardShell(sev, av, title, sub, isSim, body) {
+      return '<div class="dcard ' + sev + '"><div class="dhead">' + av + '<div><h3>' + esc(title) + '</h3><span class="muted">' + sub + '</span></div>' +
+        '<div style="text-align:right"><span class="badge ' + SEV_BADGE[sev] + '">' + SEV_TEXT[sev] + '</span>' + (isSim ? '<br><span class="badge info" style="margin-top:4px">Scenario</span>' : '') + '</div></div>' + body + '</div>';
+    }
+    function tripChips(recsFn, base) {
+      return [9.5, 9, 8.5].map(function (t) {
+        var g = withTripMinutes(t, recsFn) - base;
+        return { t: t, gain: g, html: chip(t + ' min', Math.round((TRIP_MINUTES - t) / TRIP_MINUTES * 100) + '% faster', g, false) };
+      });
+    }
+
+    // A machine is in breakdown.
+    function breakdownCard(h, recs, isSim) {
+      var HORIZON = 7, now = Date.now();
+      var proj = function (r) { return projectProduction(r, todayStr, HORIZON).total; };
+      var base = proj(recs);
+      var ideal = proj(replaceRec(recs, h, { status: 'Resolved', expected_ok_at: null }));
+      var loss = Math.max(0, ideal - base), sev = sevOf(loss, ideal);
+      var etaMs = h.expected_ok_at ? new Date(h.expected_ok_at).getTime() - now : UNKNOWN_REPAIR_DAYS * 86400000;
+      var sub = esc(h.make_model) + ' &middot; ' + breakdownProbOf(h) + '% risk &middot; ' + (h.expected_ok_at ? 'expected OK ' + niceTime(h.expected_ok_at) : 'no repair time given (we assume ' + UNKNOWN_REPAIR_DAYS + ' days)');
+      var body;
+      if (loss < 1) {
+        body = '<div class="dloss">' + (h.skill_group === 'Grader/Sprinkler'
+          ? 'This machine does not change overburden production in the projection, but it is needed for haul roads and dust control. Ask the engineer for a normal repair time.'
+          : '<b>No production is lost right now.</b> Spare machines cover it. Act only if another machine also fails.') + '</div>';
+        return { loss: 0, html: cardShell(sev, avatar(h.hemm_type), 'Breakdown: ' + h.name, sub, isSim, body) };
+      }
+      var fixes = [2, 4, 8, 12, 24, 48].filter(function (hrs) { return hrs * 3600000 < etaMs; }).map(function (hrs) {
+        return { hrs: hrs, gain: proj(replaceRec(recs, h, { expected_ok_at: new Date(now + hrs * 3600000).toISOString() })) - base };
+      });
+      var recFix = null;
+      fixes.forEach(function (f) { if (f.gain >= 0.8 * loss) recFix = f; });    // the slowest target that still recovers most of the loss
+      if (!recFix && fixes.length) recFix = fixes[0];
+      var trips = tripChips(function () { return proj(recs); }, base);
+      var bestTrip = trips.reduce(function (m, x) { return x.gain > m.gain ? x : m; }, trips[0]);
+      var best;
+      if (recFix && recFix.gain >= bestTrip.gain) {
+        best = 'Ask the Maintenance Engineer to get <b>' + esc(h.name) + '</b> back within <b>' + recFix.hrs + ' hours</b>. That recovers about <b>' + formatNum(recFix.gain) + ' m³</b> (' + Math.round(recFix.gain / loss * 100) + '% of the loss).';
+      } else {
+        best = 'Ask the dumper crews to cut the trip time to <b>' + bestTrip.t + ' min</b>: about <b>' + formatNum(bestTrip.gain) + ' m³</b> back, at no extra cost.';
+      }
+      body = '<div class="dloss">Production at risk: about <b>' + formatNum(loss) + ' m³</b> over the next ' + HORIZON + ' days (' + (loss / ideal * 100).toFixed(1) + '%).</div>' +
+        '<div class="best"><b>Best move:</b> ' + best + '</div>' +
+        '<div class="dopt"><h4>1. Ask the Maintenance Engineer to rectify quickly</h4><div class="muted">Gain if the machine is back within:</div><div class="chips2">' +
+        (fixes.length ? fixes.map(function (f) { return chip(f.hrs + ' h', '', f.gain, recFix && f.hrs === recFix.hrs); }).join('') : '<span class="muted">It is already expected back very soon.</span>') + '</div>' +
+        (recFix ? copyBtn('Request to Maintenance Engineer: please rectify ' + h.name + ' as early as possible, target ' + recFix.hrs + ' hours. It protects about ' + formatNum(recFix.gain) + ' m3 of production over the next ' + HORIZON + ' days.') : '') + '</div>' +
+        '<div class="dopt"><h4>2. Ask the crews to decrease the trip time</h4><div class="muted">Normal trip: ' + TRIP_MINUTES + ' min. Gain over ' + HORIZON + ' days if trips take:</div><div class="chips2">' +
+        trips.map(function (x) { return x.html; }).join('') + '</div>' +
+        '<div class="muted">Only on good roads and within safe speed limits.</div>' +
+        copyBtn('Request to dumper crews: please try to cut the trip time from ' + TRIP_MINUTES + ' to ' + bestTrip.t + ' minutes on good roads, within safe speed limits, while ' + h.name + ' is out. It adds about ' + formatNum(bestTrip.gain) + ' m3.') + '</div>';
+      return { loss: loss, html: cardShell(sev, avatar(h.hemm_type), 'Breakdown: ' + h.name, sub, isSim, body) };
+    }
+
+    // An operator is suddenly on leave or absent (today or tomorrow).
+    function leaveCard(o, date, recs, isSim) {
+      var shift = o.home_shift;
+      var proj = function (r) { return projectProduction(r, date, 1).total; };
+      var base = proj(recs);
+      var back = replaceRec(recs, o, { absent_dates: (o.absent_dates || []).filter(function (x) { return x !== date; }), leave_dates: (o.leave_dates || []).filter(function (x) { return x !== date; }) });
+      var ideal = proj(back);
+      var loss = Math.max(0, ideal - base), sev = sevOf(loss, ideal);
+      var when = date === todayStr ? 'today' : 'tomorrow';
+      var sub = esc(o.skill_group) + ' operator &middot; Shift ' + o.home_shift + ' &middot; ' + niceDate(date).replace(/ \d{4}$/, '') + ' (' + when + ') &middot; efficiency ' + Math.round(effOf(o) * 100) + '%';
+      var title = 'Sudden leave: ' + o.name;
+      if (loss < 1) {
+        var msg = o.skill_group === 'Grader/Sprinkler'
+          ? 'No effect on overburden production. Check that dust control and haul-road cover are still managed.'
+          : '<b>No production is lost.</b> Spare capacity in Shift ' + shift + ' covers it.';
+        return { loss: 0, html: cardShell(sev, avatar(o.skill_group), title, sub, isSim, '<div class="dloss">' + msg + '</div>') };
+      }
+      var cands = recs.filter(function (x) {
+        return x.record_type === 'OPERATOR' && x.skill_group === o.skill_group && x.home_shift !== shift && !overtimeBlocked(x, date) && !overtimeCallShift(x, date);
+      }).sort(function (a, b) {
+        var wa = leaveReason(a, date) === 'Weekly off' ? 0 : 1, wb = leaveReason(b, date) === 'Weekly off' ? 0 : 1;
+        return wa - wb || effOf(b) - effOf(a);
+      }).slice(0, 3);
+      var ots = cands.map(function (c) {
+        var calls = Object.assign({}, c.ot_calls || {}); calls[date] = shift;
+        return { who: c, gain: proj(replaceRec(recs, c, { ot_calls: calls })) - base };
+      }).sort(function (a, b) { return b.gain - a.gain; });
+      var trips = tripChips(function () { return proj(recs); }, base);
+      var need = null;
+      for (var t = 9.5; t >= 6; t -= 0.5) {
+        if (withTripMinutes(t, function () { return proj(recs); }) >= ideal - 1) { need = t; break; }
+      }
+      var bestOt = ots[0];
+      var best;
+      if (need !== null && need >= 9) {
+        best = 'Ask the crews to cut the trip time to <b>' + need + ' min</b>. That wins back the whole loss at no extra cost.';
+      } else if (bestOt && bestOt.gain >= 1) {
+        best = 'Call <b>' + esc(bestOt.who.name) + '</b> (Shift ' + bestOt.who.home_shift + ', ' + Math.round(effOf(bestOt.who) * 100) + '%) for overtime in Shift ' + shift + ': about <b>' + formatNum(bestOt.gain) + ' m³</b> back. Overtime costs extra.';
+      } else {
+        best = 'Ask the crews to shorten the trip time as far as is safe. Speed alone cannot win back everything.';
+      }
+      var body = '<div class="dloss">Production at risk on that day: about <b>' + formatNum(loss) + ' m³</b> (' + (loss / ideal * 100).toFixed(1) + '%).</div>' +
+        '<div class="best"><b>Best move:</b> ' + best + '</div>' +
+        '<div class="dopt"><h4>1. Decrease the trip time</h4><div class="muted">Normal trip: ' + TRIP_MINUTES + ' min. Gain that day if trips take:</div><div class="chips2">' +
+        trips.map(function (x) { return x.html; }).join('') + '</div>' +
+        '<div class="muted">' + (need !== null ? 'To win back the whole loss, trips must take about ' + need + ' min.' : 'Speed alone cannot win back the whole loss.') + ' Only on good roads and within safe speed limits.</div>' +
+        copyBtn('Request to crews of Shift ' + shift + ': ' + o.name + ' is on leave ' + when + '. Please try to cut the trip time from ' + TRIP_MINUTES + ' to ' + (need !== null ? need : 9) + ' minutes on good roads, within safe speed limits.') + '</div>' +
+        '<div class="dopt"><h4>2. Call an operator for overtime (costs extra)</h4>' +
+        (ots.length ? '<div class="chips2">' + ots.map(function (x, k) {
+          return chip(x.who.name, 'Shift ' + x.who.home_shift + ' \u00b7 ' + Math.round(effOf(x.who) * 100) + '%' + (leaveReason(x.who, date) === 'Weekly off' ? ' \u00b7 weekly off' : ''), x.gain, k === 0 && x.gain >= 1);
+        }).join('') + '</div>' + (bestOt && bestOt.gain >= 1 ? copyBtn('Request to Mine Manager: please call ' + bestOt.who.name + ' (Shift ' + bestOt.who.home_shift + ') for overtime in Shift ' + shift + ' on ' + niceDate(date) + ' to cover ' + o.name + '. It adds about ' + formatNum(bestOt.gain) + ' m3.') : '')
+          : '<span class="muted">No free operator with the same skill.</span>') + '</div>';
+      return { loss: loss, html: cardShell(sev, avatar(o.skill_group), title, sub, isSim, body) };
+    }
+
+    function drawDecisions() {
+      var recs = applySim(records);
+      var tomorrow = addDays(todayStr, 1), events = [];
+      recs.forEach(function (r) {
+        if (r.record_type === 'HEMM' && r.status === 'Open') events.push({ kind: 'breakdown', rec: r, isSim: r.id === sim.hemmId });
+        if (r.record_type === 'OPERATOR') [todayStr, tomorrow].forEach(function (d) {
+          var why = leaveReason(r, d);
+          if (why === 'Absent' || why === 'Leave') events.push({ kind: 'leave', rec: r, date: d, isSim: r.id === sim.opId && d === todayStr });
+        });
+      });
+      copyTexts = [];
+      var cards = events.map(function (e) {
+        return e.kind === 'breakdown' ? breakdownCard(e.rec, recs, e.isSim) : leaveCard(e.rec, e.date, recs, e.isSim);
+      }).sort(function (a, b) { return b.loss - a.loss; });
+      var shown = cards.slice(0, 4);
+      document.getElementById('dec-count').textContent = cards.length ? cards.length + (cards.length === 1 ? ' event' : ' events') : 'all clear';
+      document.getElementById('decisions').innerHTML = shown.length
+        ? shown.map(function (c) { return c.html; }).join('') + (cards.length > shown.length ? '<p class="muted">And ' + (cards.length - shown.length) + ' more event(s) with a smaller effect.</p>' : '')
+        : '<div class="dcard none"><div class="allclear"><div class="ii" style="width:40px;height:40px;border-radius:14px;display:grid;place-items:center;background:var(--good-c);color:var(--on-good)">' + icon('check') + '</div>' +
+          '<div><h3>All clear</h3><span class="muted">No machine is in breakdown and nobody has taken sudden leave for today or tomorrow. Use "Try a scenario" below to see how a decision card works.</span></div></div></div>';
+      // scenario pickers
+      var key = records.map(function (r) { return r.id; }).join(',');
+      if (key !== simKey) {
+        simKey = key;
+        document.getElementById('sim-hemm').innerHTML = '<option value="">- none -</option>' + records.filter(function (r) { return r.record_type === 'HEMM'; })
+          .map(function (h) { return '<option value="' + esc(h.id) + '">' + esc(h.name) + '</option>'; }).join('');
+        document.getElementById('sim-op').innerHTML = '<option value="">- none -</option>' + records.filter(function (r) { return r.record_type === 'OPERATOR'; })
+          .map(function (o) { return '<option value="' + esc(o.id) + '">' + esc(o.name) + ' (' + esc(o.skill_group) + ', Shift ' + o.home_shift + ')</option>'; }).join('');
+      }
+      document.getElementById('sim-hemm').value = sim.hemmId;
+      document.getElementById('sim-op').value = sim.opId;
+    }
+    document.getElementById('sim-hemm').onchange = function () { sim.hemmId = this.value; drawDecisions(); };
+    document.getElementById('sim-op').onchange = function () { sim.opId = this.value; drawDecisions(); };
+    document.getElementById('sim-clear').onclick = function () { sim.hemmId = ''; sim.opId = ''; drawDecisions(); };
+    document.getElementById('decisions').addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-copy]');
+      if (!b) return;
+      var text = copyTexts[parseInt(b.getAttribute('data-copy'), 10)] || '';
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy request'; }, 1600); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { window.prompt('Copy this request:', text); });
+      else window.prompt('Copy this request:', text);
+    });
+
     // ---------- What-if sliders ----------
     var SLIDERS = [
       { key: 'exM', label: 'Excavators', max: 4 }, { key: 'duM', label: 'Dumpers', max: 12 },
@@ -427,6 +623,7 @@
         kpi('k4', 'chart', formatNum(a.plannedM3) + ' m³', 'Planned this shift', 'about ' + formatNum(a.expectedM3) + ' m³ after breakdown chances', bestShift ? 100 * a.plannedM3 / bestShift : 0) +
         kpi('k5', 'person', Math.round(avgEff) + '%', 'Average efficiency', 'of the operators who have a machine', avgEff);
       drawInsights(curProj);
+      drawDecisions();
       drawCalendar();
 
       // ---- Allotment list ----

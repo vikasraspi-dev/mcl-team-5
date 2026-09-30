@@ -428,3 +428,24 @@ input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; backgro
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -9px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); box-shadow: var(--shadow1); }
 input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); }
 .slider { background: var(--surface-2); border-radius: 14px; padding: 8px 12px 6px; }
+
+/* ---------- Decision cards ---------- */
+.dgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 12px; }
+.dcard { background: var(--surface); border-radius: 20px; padding: 14px; box-shadow: var(--shadow-soft); border-left: 6px solid var(--line);
+  border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dcard.high { border-left-color: var(--bad); } .dcard.medium { border-left-color: var(--warn); } .dcard.low { border-left-color: var(--muted); } .dcard.none { border-left-color: var(--good); }
+.dcard .dhead { display: flex; gap: 10px; align-items: flex-start; }
+.dcard .dhead h3 { font-size: 1rem; font-weight: 600; }
+.dcard .dhead > div { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.dcard .dloss { font-size: .9rem; }
+.dcard .best { background: var(--accent-c); color: var(--on-accent-c); border-radius: 14px; padding: 8px 10px; font-size: .88rem; }
+.dcard .dopt { border-top: 1px dashed var(--line); padding-top: 8px; }
+.dcard .dopt h4 { margin: 0 0 2px; font-size: .9rem; font-weight: 600; }
+.chips2 { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.opt { border: 1px solid var(--line); border-radius: 12px; padding: 4px 10px; font-size: .8rem; background: var(--surface-2); text-align: center; line-height: 1.25; }
+.opt b { display: block; font-size: .9rem; }
+.opt.rec { border-color: var(--accent); background: var(--accent-c); color: var(--on-accent-c); }
+.opt.zero { opacity: .65; }
+.sim-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; align-items: end; margin-top: 8px; }
+.sim-row .btn { margin: 0; }
+.allclear { display: flex; gap: 12px; align-items: center; }
