@@ -3,7 +3,7 @@
 // NEVER put a secret key, a service_role key or the database password in this file.
 
 // Project URL - looks like https://abcdefghijklmnop.supabase.co
-window.SUPABASE_URL = "PASTE_PROJECT_URL_HERE";
+window.SUPABASE_URL = "https://kpbzwpysfnakaqsrqsnb.supabase.co";
 
 // Publishable key - starts with sb_publishable_
-window.SUPABASE_PUBLISHABLE_KEY = "PASTE_PUBLISHABLE_KEY_HERE";
+window.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_f5vO0fjxr5nXJQj3YtZ72w_HwnD29hX";
