@@ -67,10 +67,21 @@
       var fit = hemms.filter(isFit).length;
       var html = '<p>Tap a button to say if each machine is fit to work. <b>' + fit + ' of ' + hemms.length + '</b> are OK now.</p>';
       hemms.forEach(function (h) {
+        var etaLine = '';
+        if (h.status !== 'Resolved') {
+          etaLine = h.expected_ok_at
+            ? '<p class="' + (new Date(h.expected_ok_at) < new Date() ? 'muted' : '') + '"><b>Expected OK: ' + niceTime(h.expected_ok_at) + '</b> (' + etaFromNow(h.expected_ok_at) + ')' +
+              (new Date(h.expected_ok_at) < new Date() ? ' Please update.' : '') + '</p>'
+            : '<p class="muted">Expected OK time: not given yet.</p>';
+        }
         html += '<div class="card" data-id="' + esc(h.id) + '">' +
           '<div class="row"><div class="grow"><h3>' + esc(h.name) + '</h3>' +
           '<span class="muted">' + esc(h.make_model) + ' &middot; Sl. no. ' + esc(h.serial_no) + '</span></div>' +
-          '<span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span></div>' +
+          '<span class="badge ' + hemmStatusClass(h) + '">' + hemmStatusText(h) + '</span></div>' + etaLine +
+          '<label>Expected to be OK in (approx.)</label>' +
+          '<select data-f="eta"><option value="keep">Keep as it is</option><option value="none">Not known</option>' +
+          ETA_HOURS.map(function (n) { return '<option value="' + n + '">' + (n === 1 ? '1 hour' : n + ' hours') + '</option>'; }).join('') + '</select>' +
+          '<p class="muted">Choose the time first, then tap Under repair or Breakdown.</p>' +
           '<div class="btn-row">' +
           '<button class="btn good' + (h.status === 'Resolved' ? ' on' : '') + '" data-act="status" data-val="Resolved">OK (fit)</button>' +
           '<button class="btn warn' + (h.status === 'In progress' ? ' on' : '') + '" data-act="status" data-val="In progress">Under repair</button>' +
@@ -81,16 +92,21 @@
           '<div><label>Repair urgency</label><select data-f="urgency">' + ['Low', 'Medium', 'High'].map(function (u) {
             return '<option' + (u === h.urgency ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select></div></div>' +
           '<label>Remarks (optional)</label><input type="text" data-f="remarks" maxlength="200" value="' + esc(h.remarks || '') + '" placeholder="e.g. hydraulic hose leak">' +
-          '<button class="btn secondary" data-act="details">Save location, urgency and remarks</button></div>';
+          '<button class="btn secondary" data-act="details">Save time, location, urgency and remarks</button></div>';
       });
       document.getElementById('content').innerHTML = html;
     }
-    function engineerFields(card) {
-      return {
+    function engineerFields(card, status) {
+      var f = {
         location: card.querySelector('[data-f=location]').value,
         urgency: card.querySelector('[data-f=urgency]').value,
         remarks: card.querySelector('[data-f=remarks]').value.trim() || null
       };
+      var eta = card.querySelector('[data-f=eta]').value;
+      if (status === 'Resolved') f.expected_ok_at = null;          // machine is OK, no waiting time
+      else if (eta === 'none') f.expected_ok_at = null;
+      else if (eta !== 'keep') f.expected_ok_at = new Date(Date.now() + parseInt(eta, 10) * 3600 * 1000).toISOString();
+      return f;
     }
 
     // ---------- Operator ----------
@@ -115,7 +131,9 @@
       if (attendance === 'Present' || attendance === 'Overtime') {
         var alloc = computeAllocation(records, opDate, dutyShift);
         var mineA = alloc.assignments.filter(function (a) { return a.operator.id === me.id; })[0];
-        machineText = mineA
+        machineText = (attendance === 'Overtime' && !mineA)
+          ? '<div class="msg info">Your overtime interest is noted. Overtime costs extra, so it is used only when there are more machines than operators. You have no machine for now.</div>'
+          : mineA
           ? '<div class="msg ok">Your machine for Shift ' + dutyShift + ': <b>' + esc(hemmLabel(mineA.hemm)) + '</b></div>'
           : '<div class="msg info">No machine for you yet in Shift ' + dutyShift + '. A fit machine of your type is needed. Check again later.</div>';
       }
@@ -183,10 +201,10 @@
       if (role === 'engineer' && card) {
         var id = card.getAttribute('data-id');
         if (act === 'status') {
-          var f = engineerFields(card); f.status = btn.getAttribute('data-val');
+          var st = btn.getAttribute('data-val'); var f = engineerFields(card, st); f.status = st;
           save(id, f, 'Machine status saved.');
         } else if (act === 'details') {
-          save(id, engineerFields(card), 'Details saved.');
+          save(id, engineerFields(card, null), 'Details saved.');
         }
       } else if (role === 'operator') {
         var me = byId(getOperatorId());
