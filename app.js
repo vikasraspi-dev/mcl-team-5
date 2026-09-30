@@ -188,8 +188,13 @@ function renderHeader(activePage) {
     '<div class="appbar-top"><button class="icon-btn menu-btn" id="menu-btn" aria-label="Open the menu with machines and operators">' + icon('menu') + '</button>' +
     logoHtml() + '<div class="page-title">' + esc(PAGE_TITLES[activePage] || 'HEMM Allocator') + '</div>' +
     '<a class="role-chip" href="login.html">' + icon('person') + esc(who) + '</a>' +
-    '<button class="icon-btn" id="theme-toggle" aria-label="Switch dark or light theme">' + icon(currentTheme() === 'dark' ? 'sun' : 'moon') + '</button></div>' +
-    '<nav class="nav">' + nav + '</nav>';
+    '<button class="icon-btn" id="theme-toggle" aria-label="Switch dark or light theme">' + icon(currentTheme() === 'dark' ? 'sun' : 'moon') + '</button></div>';
+  // The phone menu lives outside the top bar (the top bar's glass effect would trap it).
+  var oldNav = document.getElementById('bottom-nav');
+  if (oldNav) oldNav.parentNode.removeChild(oldNav);
+  var navEl = document.createElement('nav');
+  navEl.id = 'bottom-nav'; navEl.className = 'nav'; navEl.innerHTML = nav;
+  document.body.appendChild(navEl);
 
   // Side bar
   var old = document.getElementById('sidebar');
@@ -205,7 +210,7 @@ function renderHeader(activePage) {
     '<div class="sb-brand">' + logoHtml() + '<div><div class="title">HEMM Allocator</div><div class="subtitle">Mahanadi Coalfields Limited</div></div>' +
     '<button class="icon-btn sb-close" id="sb-close" aria-label="Close the menu">' + icon('close') + '</button></div>' +
     '<div class="sb-nav">' + sideNav + '</div>' +
-    '<div class="sb-search">' + icon('search', true) + '<input type="text" id="sb-filter" placeholder="Find a machine or operator" aria-label="Find a machine or operator"></div>' +
+    '<div class="sb-search">' + icon('search', true) + '<input type="text" id="sb-filter" placeholder="Search here" aria-label="Find a machine or operator"></div>' +
     '<div class="sb-scroll"><div class="sb-title">Machines</div><div id="sb-machines"><p class="muted" style="padding:0 14px">Loading...</p></div>' +
     '<div class="sb-title">Operators</div><div id="sb-operators"></div></div>' +
     '<div class="sb-foot">All data is made up.</div>';

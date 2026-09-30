@@ -16,16 +16,26 @@
   <main>
     <div id="message" class="hidden"></div>
 
-    <div class="card" style="margin-top:0">
-      <div class="card-head">
-        <h3 id="day-title">Day and shift</h3>
-        <button class="btn secondary tiny" id="today-btn">Today</button>
+    <section class="hero-dash">
+      <div>
+        <div class="eyebrow">Overburden production &middot; next 30 days</div>
+        <div class="hero-num"><span id="hero-total">&nbsp;</span><small>m³</small></div>
+        <div class="hero-sub" id="hero-sub">Loading the projection...</div>
+        <div class="spark" id="spark"></div>
       </div>
-      <div class="field-grid"><div><label for="d-date">Date</label><input type="date" id="d-date"></div></div>
-      <div class="seg" id="shift-buttons"></div>
-    </div>
+      <div class="hero-ctl">
+        <div class="row1"><span class="day-title" id="day-title">Day and shift</span><button class="btn secondary tiny" id="today-btn">Today</button></div>
+        <label for="d-date">Date</label>
+        <input type="date" id="d-date">
+        <div class="seg" id="shift-buttons"></div>
+      </div>
+    </section>
 
-    <div class="kpis" id="kpis" style="margin-top:12px"></div>
+    <div class="insights" id="insights"></div>
+
+    <div class="kpis" id="kpis" style="margin-top:12px">
+      <div class="kpi k1 skel"></div><div class="kpi k2 skel"></div><div class="kpi k3 skel"></div><div class="kpi k4 skel"></div><div class="kpi k5 skel"></div>
+    </div>
 
     <div class="dash" style="margin-top:12px">
       <!-- Projection with line / bar switch and what-if sliders -->
@@ -49,6 +59,7 @@
         <div class="cal-head"><button class="cal-nav" id="cal-prev" aria-label="Previous month">&lsaquo;</button><b id="cal-title"></b>
           <button class="cal-nav" id="cal-next" aria-label="Next month">&rsaquo;</button></div>
         <div class="cal-grid" id="prod-cal"></div>
+        <div class="heat-key"><span>Weaker day</span><i></i><span>Stronger day</span></div>
       </div>
 
       <div class="card s4"><h3 class="ct">Production by shift (selected day)</h3><div class="chart-box"><canvas id="chart-shift"></canvas></div><p class="legend-note" id="shift-text"></p></div>
@@ -86,6 +97,7 @@
     var want = null;            // what-if numbers { exM, duM, exO, duO }; null = as it is now
     var sliderKey = '';
     var openedFromLink = false;
+    var curProj = null;         // the projection for the real data (not the what-if)
 
     // ---------- Controls ----------
     var dateInput = document.getElementById('d-date');
@@ -140,10 +152,14 @@
 
     // ---------- Chart helpers ----------
     function drawBar(key, canvasId, labels, datasets, o) {
+      try { drawBarNow(key, canvasId, labels, datasets, o); } catch (err) { console.log('Chart problem (' + key + '): ' + err.message); }
+    }
+    function drawBarNow(key, canvasId, labels, datasets, o) {
       if (typeof Chart === 'undefined') { return; }
       o = o || {};
       var ink = css('--ink2'), grid = css('--line'), surface = css('--surface');
-      datasets.forEach(function (d) { d.borderColor = surface; d.borderWidth = 2; d.borderRadius = 4; });
+      chartLook();
+      datasets.forEach(function (d) { d.borderColor = surface; d.borderWidth = 2; d.borderRadius = 6; d.borderSkipped = false; d.maxBarThickness = 38; });
       if (charts[key]) charts[key].destroy();
       charts[key] = new Chart(document.getElementById(canvasId), {
         type: 'bar',
@@ -151,37 +167,106 @@
         options: {
           indexAxis: o.horizontal ? 'y' : 'x',
           responsive: true, maintainAspectRatio: false, animation: false,
-          plugins: { legend: { display: datasets.length > 1, position: 'bottom', labels: { color: ink, boxWidth: 12, font: { size: 12 } } } },
+          plugins: { legend: { display: datasets.length > 1, position: 'bottom', labels: { color: ink, boxWidth: 8, boxHeight: 8, font: { size: 12 } } } },
           scales: {
-            x: { stacked: !!o.stacked, beginAtZero: true, ticks: { color: ink, precision: 0, font: { size: 11 } }, grid: { display: !!o.horizontal, color: grid } },
-            y: { stacked: !!o.stacked, beginAtZero: true, ticks: { color: ink, precision: 0, font: { size: 11 } }, grid: { display: !o.horizontal, color: grid } }
+            x: { stacked: !!o.stacked, beginAtZero: true, border: { display: false }, ticks: { color: ink, precision: 0, font: { size: 11 } }, grid: { display: !!o.horizontal, color: grid } },
+            y: { stacked: !!o.stacked, beginAtZero: true, border: { display: false }, ticks: { color: ink, precision: 0, font: { size: 11 } }, grid: { display: !o.horizontal, color: grid } }
           }
         }
       });
     }
     function drawProjChart(labels, values, base, baseLabel) {
+      try { drawProjChartNow(labels, values, base, baseLabel); } catch (err) { console.log('Chart problem (projection): ' + err.message); }
+    }
+    function drawProjChartNow(labels, values, base, baseLabel) {
       if (typeof Chart === 'undefined') { return; }
       var ink = css('--ink2'), grid = css('--line'), surface = css('--surface');
       if (charts.proj) charts.proj.destroy();
+      chartLook();
+      var gradient = function (ctx) {
+        var c = ctx.chart, area = c.chartArea;
+        if (!area) return 'rgba(107,122,143,.25)';
+        var g = c.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+        g.addColorStop(0, 'rgba(107,122,143,.55)'); g.addColorStop(1, 'rgba(107,122,143,.02)');
+        return g;
+      };
       var main = projView === 'line'
-        ? { type: 'line', label: 'Projected per day (m³)', data: values, borderColor: '#6B7A8F', backgroundColor: 'rgba(107,122,143,0.22)', fill: true, tension: 0.3, borderWidth: 3, pointRadius: 2 }
-        : { type: 'bar', label: 'Projected per day (m³)', data: values, backgroundColor: '#6B7A8F', borderColor: surface, borderWidth: 2, borderRadius: 4 };
+        ? { type: 'line', label: 'Projected per day (m³)', data: values, borderColor: '#6B7A8F', backgroundColor: gradient, fill: true, tension: 0.35, borderWidth: 3, pointRadius: 0, pointHoverRadius: 5 }
+        : { type: 'bar', label: 'Projected per day (m³)', data: values, backgroundColor: '#6B7A8F', borderColor: surface, borderWidth: 2, borderRadius: 6, borderSkipped: false, maxBarThickness: 22 };
       charts.proj = new Chart(document.getElementById('chart-proj'), {
         type: projView,
         data: { labels: labels, datasets: [main,
           { type: 'line', label: baseLabel, data: base, borderColor: '#F7882F', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, fill: false }] },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
-          plugins: { legend: { position: 'bottom', labels: { color: ink, boxWidth: 12, font: { size: 12 } } } },
+          plugins: { legend: { position: 'bottom', labels: { color: ink, boxWidth: 8, boxHeight: 8, font: { size: 12 } } } },
           scales: {
-            x: { ticks: { color: ink, maxTicksLimit: 8 }, grid: { display: false } },
-            y: { beginAtZero: true, ticks: { color: ink }, grid: { color: grid } }
+            x: { border: { display: false }, ticks: { color: ink, maxTicksLimit: 8 }, grid: { display: false } },
+            y: { beginAtZero: true, border: { display: false }, ticks: { color: ink }, grid: { color: grid } }
           }
         }
       });
     }
-    function kpi(cls, ic, num, label, note) {
-      return '<div class="kpi ' + cls + '"><div class="kico">' + icon(ic, true) + '</div><div class="num">' + num + '</div><div class="lbl">' + label + '</div><div class="note">' + (note || '&nbsp;') + '</div></div>';
+    // A small round gauge with a percentage in the middle.
+    function ring(pct) {
+      pct = Math.max(0, Math.min(100, Math.round(pct || 0)));
+      var c = 2 * Math.PI * 24;
+      return '<svg class="ring" viewBox="0 0 60 60" aria-hidden="true"><circle cx="30" cy="30" r="24" fill="none" stroke="currentColor" stroke-opacity=".16" stroke-width="7"/>' +
+        '<circle cx="30" cy="30" r="24" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="' + (c * pct / 100).toFixed(1) + ' ' + c.toFixed(1) + '" transform="rotate(-90 30 30)"/>' +
+        '<text x="30" y="34.5" text-anchor="middle" font-size="13" font-weight="600" fill="currentColor">' + pct + '%</text></svg>';
+    }
+    function kpi(cls, ic, num, label, note, pct) {
+      return '<div class="kpi ' + cls + '"><div class="kt"><div class="kico">' + icon(ic, true) + '</div><div class="num">' + num + '</div><div class="lbl">' + label + '</div><div class="note">' + (note || '&nbsp;') + '</div></div>' + ring(pct) + '</div>';
+    }
+    // A little trend line drawn as a picture (works even if the chart library is slow to load).
+    function sparkline(values) {
+      if (!values.length) return '';
+      var w = 300, h = 64, pad = 4, lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
+      var span = hi > lo ? hi - lo : 1;
+      var pts = values.map(function (v, i) {
+        return [pad + (w - 2 * pad) * i / Math.max(1, values.length - 1), h - pad - (h - 2 * pad) * (v - lo) / span];
+      });
+      var line = pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ');
+      return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">' +
+        '<stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>' +
+        '<polygon points="' + pad + ',' + h + ' ' + line + ' ' + (w - pad) + ',' + h + '" fill="url(#sg)"/>' +
+        '<polyline points="' + line + '" fill="none" stroke="#F7C331" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>';
+    }
+    // Look of all charts: round legend dots, soft tooltips, calm grid.
+    function chartLook() {
+      if (typeof Chart === 'undefined' || !Chart.defaults) return;
+      Chart.defaults.font.family = 'Roboto, system-ui, -apple-system, "Segoe UI", sans-serif';
+      Chart.defaults.color = css('--ink2');
+      Chart.defaults.plugins.legend.labels.usePointStyle = true;
+      Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(30,38,52,.95)';
+      Chart.defaults.plugins.tooltip.titleColor = '#ffffff';
+      Chart.defaults.plugins.tooltip.bodyColor = '#eef1f6';
+      Chart.defaults.plugins.tooltip.cornerRadius = 10;
+      Chart.defaults.plugins.tooltip.padding = 10;
+      Chart.defaults.plugins.tooltip.usePointStyle = true;
+    }
+    // Text insights worked out from the numbers.
+    function drawInsights(cur) {
+      var base = fleetCounts(records);
+      var levers = [['exM', 'excavator'], ['duM', 'dumper'], ['exO', 'excavator operator per shift'], ['duO', 'dumper operator per shift']].map(function (l) {
+        var w = JSON.parse(JSON.stringify(base)); w[l[0]] += 1;
+        return { label: l[1], delta: projectProduction(applyWhatIf(records, w), todayStr, PROJECTION_DAYS).total - cur.total };
+      }).sort(function (a, b) { return b.delta - a.delta; });
+      var best = levers[0];
+      var weak = cur.days.reduce(function (m, d) { return d.total < m.total ? d : m; }, cur.days[0]);
+      var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
+      var risky = hemms.slice().sort(function (p, q) { return breakdownProbOf(q) - breakdownProbOf(p); })[0];
+      var offDays = 0;
+      records.filter(function (r) { return r.record_type === 'OPERATOR'; }).forEach(function (o) {
+        for (var i = 0; i < 7; i++) if (leaveReason(o, addDays(todayStr, i))) offDays++;
+      });
+      function chip(ic, main, sub) { return '<div class="insight"><div class="ii">' + icon(ic) + '</div><div>' + main + '<small>' + sub + '</small></div></div>'; }
+      document.getElementById('insights').innerHTML =
+        (best && best.delta >= 1
+          ? chip('check', '<b>Biggest lever:</b> one more ' + best.label + ' adds about <b>' + formatNum(best.delta) + ' m³</b>', '+' + (best.delta / cur.total * 100).toFixed(1) + '% over 30 days. Try it with the sliders below.')
+          : chip('check', '<b>Biggest lever:</b> more machines or operators would not raise production now', 'Something else is the limit. Try the sliders below.')) +
+        chip('event', '<b>Weakest day:</b> ' + niceDate(weak.date).replace(/ \d{4}$/, '') + ' (' + DAY_NAMES[weekdayOf(weak.date)] + ') with ' + formatNum(weak.total) + ' m³', 'Tap it in the production calendar to see why.') +
+        chip('truck', '<b>Riskiest machine:</b> ' + (risky ? esc(risky.name) + ' (' + breakdownProbOf(risky) + '% per shift)' : '-'), offDays + ' operator-days of weekly off / leave in the next 7 days.');
     }
 
     // ---------- What-if sliders ----------
@@ -240,8 +325,10 @@
       } else {
         res.innerHTML = '';
       }
-      var k5 = document.getElementById('kpi-proj');
-      if (k5) k5.innerHTML = kpi('k5', 'chart', formatNum(P.total) + ' m³', active ? 'What-if projection, 30 days' : 'Projected in 30 days', pct + '% of best case').replace(/^<div class="kpi k5">|<\/div>$/g, '');
+      curProj = current;
+      document.getElementById('hero-total').textContent = formatNum(P.total);
+      document.getElementById('hero-sub').innerHTML = (active ? '<b>What-if:</b> ' : '') + 'average ' + formatNum(P.average) + ' m³ a day &middot; ' + pct + '% of the best case (' + formatNum(P.fullTotal) + ' m³)';
+      document.getElementById('spark').innerHTML = sparkline(P.days.map(function (d) { return d.total; }));
     }
 
     // ---------- Production calendar (tap a day) ----------
@@ -326,16 +413,20 @@
       document.getElementById('day-title').textContent = 'Showing ' + where;
 
       var offCount = ops.filter(function (r) { return r.home_shift === selShift && leaveReason(r, selDate); }).length;
+      var shiftOps = ops.filter(function (r) { return r.home_shift === selShift; }).length;
       var okByType = ['Excavator', 'Dumper'].map(function (t) {
         return hemms.filter(function (h) { return h.hemm_type === t && h.status === 'Resolved'; }).length + '/' + hemms.filter(function (h) { return h.hemm_type === t; }).length + ' ' + t.toLowerCase() + 's';
       }).join(', ');
-      document.getElementById('kpis').innerHTML =
-        kpi('k1', 'truck', a.fitCount + ' / ' + a.hemmCount, 'HEMMs OK', okByType) +
-        kpi('k2', 'groups', a.availableCount, 'Operators available', offCount + ' off / leave / absent in Shift ' + selShift) +
-        kpi('k3', 'work', a.assignments.length, 'Machines running', a.idleHemms.length + ' OK machine(s) without operator') +
-        kpi('k4', 'chart', formatNum(a.plannedM3) + ' m³', 'Planned this shift', 'about ' + formatNum(a.expectedM3) + ' m³ after breakdown chances') +
-        '<div id="kpi-proj" class="kpi k5"></div>';
       drawProjection();
+      var bestShift = curProj.fullTotal / (PROJECTION_DAYS * SHIFTS.length);
+      var avgEff = a.assignments.length ? a.assignments.reduce(function (t, x) { return t + x.eff; }, 0) / a.assignments.length * 100 : 0;
+      document.getElementById('kpis').innerHTML =
+        kpi('k1', 'truck', a.fitCount + ' / ' + a.hemmCount, 'HEMMs OK', okByType, a.hemmCount ? 100 * a.fitCount / a.hemmCount : 0) +
+        kpi('k2', 'groups', a.availableCount, 'Operators available', offCount + ' off / leave / absent in Shift ' + selShift, shiftOps ? 100 * a.availableCount / shiftOps : 0) +
+        kpi('k3', 'work', a.assignments.length, 'Machines running', a.idleHemms.length + ' OK machine(s) without operator', a.fitCount ? 100 * a.assignments.length / a.fitCount : 0) +
+        kpi('k4', 'chart', formatNum(a.plannedM3) + ' m³', 'Planned this shift', 'about ' + formatNum(a.expectedM3) + ' m³ after breakdown chances', bestShift ? 100 * a.plannedM3 / bestShift : 0) +
+        kpi('k5', 'person', Math.round(avgEff) + '%', 'Average efficiency', 'of the operators who have a machine', avgEff);
+      drawInsights(curProj);
       drawCalendar();
 
       // ---- Allotment list ----
@@ -398,7 +489,7 @@
       var top = ops.slice().sort(function (p, q) { return effOf(q) - effOf(p); }).slice(0, 8);
       document.getElementById('top-ops').innerHTML = top.map(function (o, k) {
         var eff = Math.round(effOf(o) * 100);
-        return '<div class="row" style="padding:5px 0"><div class="grow"><b>' + (k + 1) + '. ' + esc(o.name) + '</b> <span class="muted">Shift ' + o.home_shift + ' &middot; ' + skillText(o.skill_group) + '</span>' +
+        return '<div class="row" style="padding:5px 0"><span class="rank r' + (k + 1) + '">' + (k + 1) + '</span><div class="grow"><b>' + esc(o.name) + '</b> <span class="muted">Shift ' + o.home_shift + ' &middot; ' + skillText(o.skill_group) + '</span>' +
           '<div class="meter" style="margin-top:3px"><i style="width:' + eff + '%"></i></div></div><span class="badge info">' + eff + '%</span></div>';
       }).join('');
 
