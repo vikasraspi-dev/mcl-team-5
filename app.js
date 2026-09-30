@@ -670,3 +670,11 @@ function applyWhatIf(records, want) {
   });
   return out;
 }
+
+// ---- Decisions: try a different trip time for a moment ----
+// Runs fn() as if one dumper trip took `minutes` minutes, then puts the normal value back.
+function withTripMinutes(minutes, fn) {
+  var old = TRIP_MINUTES;
+  TRIP_MINUTES = minutes;
+  try { return fn(); } finally { TRIP_MINUTES = old; }
+}
