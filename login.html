@@ -118,7 +118,11 @@
           return;
         }
       } catch (err) {
-        showError('Login failed. Please check the email and password.', err);
+        if (err && err.code === 'email_not_confirmed') {
+          showError('This login exists, but its email is not confirmed yet. Ask the Data Keeper to run database/06-set-login-roles.sql (it confirms the email), or to open Authentication > Users in Supabase and confirm the user.', err);
+        } else {
+          showError('Login failed. Please check the email and password.', err);
+        }
       }
       go.disabled = false;
     });
