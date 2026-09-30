@@ -131,8 +131,8 @@
       if (attendance === 'Present' || attendance === 'Overtime') {
         var alloc = computeAllocation(records, opDate, dutyShift);
         var mineA = alloc.assignments.filter(function (a) { return a.operator.id === me.id; })[0];
-        machineText = (attendance === 'Overtime' && !ALLOW_OVERTIME_ALLOTMENT)
-          ? '<div class="msg info">Your overtime interest is noted. Overtime costs extra, so overtime operators are not given machines automatically. The Shift Incharge will decide.</div>'
+        machineText = (attendance === 'Overtime' && !mineA)
+          ? '<div class="msg info">Your overtime interest is noted. Overtime costs extra, so it is used only when there are more machines than operators. You have no machine for now.</div>'
           : mineA
           ? '<div class="msg ok">Your machine for Shift ' + dutyShift + ': <b>' + esc(hemmLabel(mineA.hemm)) + '</b></div>'
           : '<div class="msg info">No machine for you yet in Shift ' + dutyShift + '. A fit machine of your type is needed. Check again later.</div>';

@@ -19,10 +19,8 @@ var LOCATIONS = ['Parking yard', 'Workshop', 'Pit', 'Haul road', 'Dump yard'];
 var ETA_HOURS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72];
 var SHIFT_START_HOUR = { A: 6, B: 14, C: 22 };
 
-// Overtime costs money. While this is false, operators who raised overtime interest
-// are NOT given machines automatically. The Shift Incharge decides about them.
-// Change to true only if you want overtime operators to fill empty machines.
-var ALLOW_OVERTIME_ALLOTMENT = false;
+// Overtime costs money. Overtime operators get a machine ONLY when there are more
+// machines than regular (present) operators of that type. Extra ones are not allotted.
 
 // ---- Allocation rules: change these lists to change who gets a machine first ----
 // Machines of an earlier group get operators first.
@@ -162,7 +160,7 @@ function hemmLabel(h) { return h.name + ' (' + (h.make_model || '') + ')'; }
 //   2. Machines under repair whose "expected OK" time is on or before the shift start.
 // Operators who can be given a machine:
 //   1. Own-shift operators who marked "Present" for that date.
-//   2. Overtime operators, ONLY if ALLOW_OVERTIME_ALLOTMENT is true (it is false: overtime costs money).
+//   2. Overtime operators, ONLY for machines left empty because there are fewer regular operators.
 function computeAllocation(records, dateStr, shift) {
   var hemms = records.filter(function (r) { return r.record_type === 'HEMM'; });
   var ops = records.filter(function (r) { return r.record_type === 'OPERATOR'; });
@@ -176,8 +174,8 @@ function computeAllocation(records, dateStr, shift) {
   var overtimeAll = ops.filter(function (o) {
     return o.home_shift !== shift && o.attendance === 'Overtime' && o.duty_shift === shift && o.duty_date === dateStr;
   }).sort(byName);
-  var overtime = ALLOW_OVERTIME_ALLOTMENT ? overtimeAll : [];
-  var overtimeNotAllotted = ALLOW_OVERTIME_ALLOTMENT ? [] : overtimeAll;
+  var overtimeNotAllotted = [];
+  var overtimeUsed = 0;
 
   // Machines that can work in this shift, in the order they should get operators.
   var usable = hemms.filter(function (h) {
@@ -204,21 +202,24 @@ function computeAllocation(records, dateStr, shift) {
   var assignments = [], idleHemms = [], idleOperators = [];
   GROUP_ORDER.forEach(function (group) {
     var machines = ranked.filter(function (h) { return h.skill_group === group; });
-    var people = regular.filter(function (o) { return o.skill_group === group; })
-      .map(function (o) { return { op: o, ot: false }; })
-      .concat(overtime.filter(function (o) { return o.skill_group === group; })
-      .map(function (o) { return { op: o, ot: true }; }));
+    var regG = regular.filter(function (o) { return o.skill_group === group; });
+    var otG = overtimeAll.filter(function (o) { return o.skill_group === group; });
     machines.forEach(function (h, i) {
-      if (people[i]) assignments.push({ hemm: h, operator: people[i].op, overtime: people[i].ot, expected: !isFit(h) });
-      else idleHemms.push(h);
+      if (regG[i]) assignments.push({ hemm: h, operator: regG[i], overtime: false, expected: !isFit(h) });
+      else if (otG[i - regG.length]) {
+        assignments.push({ hemm: h, operator: otG[i - regG.length], overtime: true, expected: !isFit(h) });
+        overtimeUsed++;
+      } else idleHemms.push(h);
     });
+    // Overtime operators beyond the empty machines are not allotted.
+    otG.slice(Math.max(0, machines.length - regG.length)).forEach(function (o) { overtimeNotAllotted.push(o); });
 
     // Free manpower: say what each idle operator can do.
     var waiting = comingBack.filter(function (h) { return h.skill_group === group; });
     var unknown = notUsable.some(function (h) {
       return h.skill_group === group && !isFit(h) && !etaOf(h);
     });
-    people.slice(machines.length).forEach(function (p, j) {
+    regG.slice(machines.length).forEach(function (op, j) {
       var advice, kind;
       if (waiting[j]) {
         kind = 'wait';
@@ -230,7 +231,7 @@ function computeAllocation(records, dateStr, shift) {
         kind = 'free';
         advice = 'No machine of this type is expected back in this shift. Can be given other work.';
       }
-      idleOperators.push({ operator: p.op, overtime: p.ot, advice: advice, kind: kind });
+      idleOperators.push({ operator: op, overtime: false, advice: advice, kind: kind });
     });
   });
 
@@ -241,7 +242,7 @@ function computeAllocation(records, dateStr, shift) {
     overtimeNotAllotted: overtimeNotAllotted,
     comingBack: comingBack,
     notFit: hemms.filter(function (h) { return !isFit(h); }),
-    availableCount: regular.length + overtime.length,
+    availableCount: regular.length + overtimeUsed,
     overtimeCount: overtimeAll.length,
     fitCount: hemms.filter(isFit).length,
     hemmCount: hemms.length

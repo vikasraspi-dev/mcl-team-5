@@ -125,7 +125,7 @@
 
       var att = '';
       if (a.idleHemms.length) att += '<h3>OK machines waiting for an operator</h3><p>' + a.idleHemms.map(function (h) { return esc(h.name); }).join(', ') + '</p>';
-      if (a.overtimeNotAllotted.length) att += '<h3>Overtime interest (not given machines)</h3><p class="muted">Overtime costs extra, so the tool does not allot these operators. The Shift Incharge decides.</p><p>' +
+      if (a.overtimeNotAllotted.length) att += '<h3>Overtime interest (not needed)</h3><p class="muted">Overtime costs extra. Overtime is used only when there are more machines than operators. These operators are not needed now.</p><p>' +
         a.overtimeNotAllotted.map(function (o) { return esc(o.name) + ' (' + esc(o.skill_group) + ', home Shift ' + o.home_shift + ')'; }).join(', ') + '</p>';
       if (a.comingBack.length) att += '<h3>Machines expected back during this shift</h3>' + a.comingBack.map(function (h) {
         return '<div class="row"><div class="grow"><b>' + esc(h.name) + '</b></div><span class="badge warn">OK by ' + niceTime(h.expected_ok_at) + '</span></div>';
