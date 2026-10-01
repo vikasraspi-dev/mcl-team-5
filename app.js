@@ -582,17 +582,11 @@ function projectProduction(records, startDateStr, days) {
   var dayList = [];
   for (var i = 0; i < days; i++) dayList.push(addDays(startDateStr, i));
 
-  // Chance that an operator takes an unplanned leave on any one working day.
+  // Chance that an operator takes an unplanned leave on any one working day (about 2 days a month).
+  // Marked leave and marked absences are ADDED on top of this, so marking someone absent can only lower production.
+  var unplannedP = Math.min(1, EXTRA_LEAVE_DAYS / 30);
   var extraP = {};
-  ops.forEach(function (o) {
-    var marked = 0, working = 0;
-    dayList.forEach(function (d) {
-      var r = leaveReason(o, d);
-      if (r === 'Leave' || r === 'Absent') marked++; else if (!r) working++;
-    });
-    var left = Math.max(0, EXTRA_LEAVE_DAYS * days / 30 - marked);
-    extraP[o.id] = Math.min(1, left / Math.max(1, working));
-  });
+  ops.forEach(function (o) { extraP[o.id] = unplannedP; });
   function opChance(o, d) { return leaveReason(o, d) ? 0 : 1 - extraP[o.id]; }
   function machineChance(h, startTime) {
     var back = 0;
