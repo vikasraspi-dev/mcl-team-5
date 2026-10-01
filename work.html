@@ -43,6 +43,7 @@
       if (busy) return;
       busy = true;
       try {
+        records = await loadRecords();            // start from the newest data, so only THIS change is measured
         var before = projectedTotal(records);
         await updateRecord(id, fields);
         records = await loadRecords();
