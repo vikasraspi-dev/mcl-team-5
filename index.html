@@ -28,6 +28,7 @@
         <label for="d-date">Date</label>
         <input type="date" id="d-date">
         <div class="seg" id="shift-buttons"></div>
+        <button class="btn secondary tiny" id="reset-btn" style="margin-top:10px;width:100%">Reset demo data to normal</button>
       </div>
     </section>
 
@@ -540,6 +541,50 @@
         return cardShell(sev, avatar(h.hemm_type), (moved ? (a.verdict === 'prepone' ? 'Prepone? ' : 'Postpone? ') : 'Keep: ') + h.name, esc(h.maint_task || 'Maintenance') + ' &middot; ' + sub, false, body);
       }).join('');
     }
+
+
+    // ---------- Reset everything to normal (for demonstrations) ----------
+    document.getElementById('reset-btn').onclick = function () {
+      document.getElementById('modal').innerHTML =
+        '<div class="mhead"><h3>Reset everything to normal?</h3><button class="btn secondary tiny" data-close>Cancel</button></div>' +
+        '<p>This changes the saved data, so everyone who opens the dashboard sees it.</p>' +
+        '<ul class="muted" style="margin:4px 0 8px;padding-left:20px">' +
+        '<li>Every machine is set to <b>OK</b>: no breakdown, no repair, no repair time.</li>' +
+        '<li>Every operator has <b>no leave</b>, no absence, no overtime call and no overtime interest.</li>' +
+        '<li>Weekly off days, efficiency and breakdown chances stay as they are.</li></ul>' +
+        '<label style="display:flex;gap:10px;align-items:center;font-weight:400;color:var(--ink)"><input type="checkbox" id="reset-maint" style="width:22px;height:22px;flex:none"> Also clear all planned maintenance</label>' +
+        '<button class="btn" id="reset-go" style="margin-top:12px">Reset now</button>';
+      document.getElementById('modal-back').classList.add('show');
+    };
+    document.getElementById('modal-back').addEventListener('click', async function (e) {
+      if (!e.target.closest('#reset-go')) return;
+      var go = document.getElementById('reset-go'), withMaint = document.getElementById('reset-maint').checked;
+      go.disabled = true; go.textContent = 'Resetting...';
+      try {
+        if (dbSetupError || !db) throw (dbSetupError || new Error('Database link is not ready.'));
+        var before = projectedTotal(records), stamp = new Date().toISOString();
+        var machines = { status: 'Resolved', expected_ok_at: null, urgency: 'Low', location: 'Parking yard', remarks: null, updated_at: stamp };
+        if (withMaint) { machines.maint_task = null; machines.maint_start = null; machines.maint_hours = null; machines.maint_due = null; }
+        var r1 = await db.from(TABLE).update(machines).eq('record_type', 'HEMM').select('id');
+        if (r1.error) throw r1.error;
+        var r2 = await db.from(TABLE).update({ leave_dates: [], absent_dates: [], ot_calls: {}, attendance: 'Not marked', duty_date: null, duty_shift: null, status: 'Open', updated_at: stamp })
+          .eq('record_type', 'OPERATOR').select('id');
+        if (r2.error) throw r2.error;
+        sim.hemmId = ''; sim.opId = '';
+        records = await loadRecords();
+        var after = projectedTotal(records), change = changeMessage(before, after);
+        lastTotal = after;
+        closeDetail();
+        renderSidebar(records);
+        render();
+        showMessage('Everything is back to normal: all machines OK, no leave or absences' + (withMaint ? ', no planned maintenance' : '') + '. ' + change.text, change.kind === 'info' ? 'ok' : change.kind);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch (err) {
+        closeDetail();
+        showError('Sorry, the reset did not work. Some data may be changed already; press Reset again to finish.', err);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    });
 
     // ---------- What-if sliders ----------
     var SLIDERS = [
