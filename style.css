@@ -465,3 +465,7 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .tl-key { display: flex; flex-wrap: wrap; gap: 12px; font-size: .75rem; color: var(--ink2); margin-top: 8px; }
 .tl-key i { display: inline-block; width: 22px; height: 10px; border-radius: 5px; margin-right: 4px; vertical-align: -1px; }
 .opt.cost b { font-weight: 600; }
+
+/* labels inside small tiles may wrap instead of pushing the page sideways */
+.tcard .badge { max-width: 100%; white-space: normal; text-align: left; }
+.tcard .chips, .tcard .foot { min-width: 0; }
